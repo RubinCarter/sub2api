@@ -1004,17 +1004,17 @@
               <Toggle v-model="form.purchase_subscription_enabled" />
             </div>
 
-            <!-- URL -->
+            <!-- Purchase Content -->
             <div>
               <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {{ t('admin.settings.purchase.url') }}
               </label>
-              <input
+              <textarea
                 v-model="form.purchase_subscription_url"
-                type="url"
+                rows="6"
                 class="input font-mono text-sm"
                 :placeholder="t('admin.settings.purchase.urlPlaceholder')"
-              />
+              ></textarea>
               <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                 {{ t('admin.settings.purchase.urlHint') }}
               </p>

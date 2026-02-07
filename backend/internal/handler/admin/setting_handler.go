@@ -264,18 +264,13 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		purchaseURL = strings.TrimSpace(*req.PurchaseSubscriptionURL)
 	}
 
-	// - 启用时要求 URL 合法且非空
-	// - 禁用时允许为空；若提供了 URL 也做基本校验，避免误配置
-	if purchaseEnabled {
-		if purchaseURL == "" {
-			response.BadRequest(c, "Purchase Subscription URL is required when enabled")
-			return
-		}
-		if err := config.ValidateAbsoluteHTTPURL(purchaseURL); err != nil {
-			response.BadRequest(c, "Purchase Subscription URL must be an absolute http(s) URL")
-			return
-		}
-	} else if purchaseURL != "" {
+	// - 启用时要求内容非空
+	// - 内容为 URL 时校验格式；非 URL 内容（HTML/Markdown）直接放行
+	if purchaseEnabled && purchaseURL == "" {
+		response.BadRequest(c, "Purchase Subscription content is required when enabled")
+		return
+	}
+	if purchaseURL != "" && (strings.HasPrefix(purchaseURL, "http://") || strings.HasPrefix(purchaseURL, "https://")) {
 		if err := config.ValidateAbsoluteHTTPURL(purchaseURL); err != nil {
 			response.BadRequest(c, "Purchase Subscription URL must be an absolute http(s) URL")
 			return
