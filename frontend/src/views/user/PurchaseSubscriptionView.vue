@@ -52,7 +52,7 @@
         </div>
 
         <div
-          v-else-if="!isValidUrl"
+          v-else-if="!purchaseUrl"
           class="flex h-full items-center justify-center p-10 text-center"
         >
           <div class="max-w-md">
@@ -70,7 +70,15 @@
           </div>
         </div>
 
-        <iframe v-else :src="purchaseUrl" class="h-full w-full border-0" allowfullscreen></iframe>
+        <!-- iframe mode -->
+        <iframe
+          v-else-if="isValidUrl"
+          :src="purchaseUrl"
+          class="h-full w-full border-0"
+          allowfullscreen
+        ></iframe>
+        <!-- HTML mode -->
+        <div v-else class="prose dark:prose-invert max-w-none p-6" v-html="purchaseUrl"></div>
       </div>
     </div>
   </AppLayout>
