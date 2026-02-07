@@ -391,6 +391,7 @@
             {{ t('home.docs') }}
           </a>
           <a
+            v-if="showGithubButton"
             :href="githubUrl"
             target="_blank"
             rel="noopener noreferrer"
@@ -422,6 +423,7 @@ const siteLogo = computed(() => appStore.cachedPublicSettings?.site_logo || appS
 const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI API Gateway Platform')
 const docUrl = computed(() => appStore.cachedPublicSettings?.doc_url || appStore.docUrl || '')
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
+const showGithubButton = computed(() => appStore.cachedPublicSettings?.show_github_button !== false)
 
 // Check if homeContent is a URL (for iframe display)
 const isHomeContentUrl = computed(() => {
@@ -433,7 +435,10 @@ const isHomeContentUrl = computed(() => {
 const isDark = ref(document.documentElement.classList.contains('dark'))
 
 // GitHub URL
-const githubUrl = 'https://github.com/Wei-Shaw/sub2api'
+const githubUrl = computed(() => {
+  const repo = appStore.cachedPublicSettings?.github_repo
+  return repo ? `https://github.com/${repo}` : 'https://github.com/Wei-Shaw/sub2api'
+})
 
 // Auth state
 const isAuthenticated = computed(() => authStore.isAuthenticated)
