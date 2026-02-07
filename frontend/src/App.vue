@@ -40,10 +40,11 @@ watch(
 )
 
 watch(
-  () => appStore.siteName,
-  (newName) => {
+  () => [appStore.siteName, appStore.cachedPublicSettings?.site_subtitle],
+  ([newName, newSubtitle]) => {
     if (newName) {
-      document.title = `${newName} - AI API Gateway`
+      const subtitle = newSubtitle || 'AI API Gateway'
+      document.title = `${newName} - ${subtitle}`
     }
   },
   { immediate: true }
