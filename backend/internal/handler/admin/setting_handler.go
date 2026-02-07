@@ -20,15 +20,17 @@ type SettingHandler struct {
 	emailService     *service.EmailService
 	turnstileService *service.TurnstileService
 	opsService       *service.OpsService
+	updateService    *service.UpdateService
 }
 
 // NewSettingHandler 创建系统设置处理器
-func NewSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService) *SettingHandler {
+func NewSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService, updateService *service.UpdateService) *SettingHandler {
 	return &SettingHandler{
 		settingService:   settingService,
 		emailService:     emailService,
 		turnstileService: turnstileService,
 		opsService:       opsService,
+		updateService:    updateService,
 	}
 }
 
@@ -74,6 +76,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		DocURL:                               settings.DocURL,
 		HomeContent:                          settings.HomeContent,
 		HideCcsImportButton:                  settings.HideCcsImportButton,
+		ShowGithubButton:                     settings.ShowGithubButton,
+		GithubRepo:                           settings.GithubRepo,
 		PurchaseSubscriptionEnabled:          settings.PurchaseSubscriptionEnabled,
 		PurchaseSubscriptionURL:              settings.PurchaseSubscriptionURL,
 		DefaultConcurrency:                   settings.DefaultConcurrency,
@@ -131,6 +135,8 @@ type UpdateSettingsRequest struct {
 	DocURL                      string  `json:"doc_url"`
 	HomeContent                 string  `json:"home_content"`
 	HideCcsImportButton         bool    `json:"hide_ccs_import_button"`
+	ShowGithubButton            bool    `json:"show_github_button"`
+	GithubRepo                  string  `json:"github_repo"`
 	PurchaseSubscriptionEnabled *bool   `json:"purchase_subscription_enabled"`
 	PurchaseSubscriptionURL     *string `json:"purchase_subscription_url"`
 
@@ -317,6 +323,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DocURL:                      req.DocURL,
 		HomeContent:                 req.HomeContent,
 		HideCcsImportButton:         req.HideCcsImportButton,
+		ShowGithubButton:            req.ShowGithubButton,
+		GithubRepo:                  req.GithubRepo,
 		PurchaseSubscriptionEnabled: purchaseEnabled,
 		PurchaseSubscriptionURL:     purchaseURL,
 		DefaultConcurrency:          req.DefaultConcurrency,
@@ -361,6 +369,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 
 	h.auditSettingsUpdate(c, previousSettings, settings, req)
 
+	// 同步 GitHub Repo 到 UpdateService（运行时生效）
+	if h.updateService != nil && req.GithubRepo != "" {
+		h.updateService.SetGithubRepo(req.GithubRepo)
+	}
+
 	// 重新获取设置返回
 	updatedSettings, err := h.settingService.GetAllSettings(c.Request.Context())
 	if err != nil {
@@ -398,6 +411,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DocURL:                               updatedSettings.DocURL,
 		HomeContent:                          updatedSettings.HomeContent,
 		HideCcsImportButton:                  updatedSettings.HideCcsImportButton,
+		ShowGithubButton:                     updatedSettings.ShowGithubButton,
+		GithubRepo:                           updatedSettings.GithubRepo,
 		PurchaseSubscriptionEnabled:          updatedSettings.PurchaseSubscriptionEnabled,
 		PurchaseSubscriptionURL:              updatedSettings.PurchaseSubscriptionURL,
 		DefaultConcurrency:                   updatedSettings.DefaultConcurrency,
@@ -515,6 +530,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.HideCcsImportButton != after.HideCcsImportButton {
 		changed = append(changed, "hide_ccs_import_button")
+	}
+	if before.GithubRepo != after.GithubRepo {
+		changed = append(changed, "github_repo")
 	}
 	if before.DefaultConcurrency != after.DefaultConcurrency {
 		changed = append(changed, "default_concurrency")

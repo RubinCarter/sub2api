@@ -123,7 +123,8 @@
                 </router-link>
 
                 <a
-                  href="https://github.com/Wei-Shaw/sub2api"
+                  v-if="showGithubButton"
+                  :href="githubUrl"
                   target="_blank"
                   rel="noopener noreferrer"
                   @click="closeDropdown"
@@ -228,6 +229,11 @@ const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
 const contactInfo = computed(() => appStore.contactInfo)
 const docUrl = computed(() => appStore.docUrl)
+const showGithubButton = computed(() => appStore.cachedPublicSettings?.show_github_button !== false)
+const githubUrl = computed(() => {
+  const repo = appStore.cachedPublicSettings?.github_repo
+  return repo ? `https://github.com/${repo}` : 'https://github.com/Wei-Shaw/sub2api'
+})
 
 // 只在标准模式的管理员下显示新手引导按钮
 const showOnboardingButton = computed(() => {
