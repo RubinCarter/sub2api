@@ -37,6 +37,8 @@ type SystemSettings struct {
 	DocURL                      string
 	HomeContent                 string
 	HideCcsImportButton         bool
+	ShowGithubButton            bool
+	GithubRepo                  string
 	PurchaseSubscriptionEnabled bool
 	PurchaseSubscriptionURL     string
 
@@ -78,6 +80,8 @@ type PublicSettings struct {
 	DocURL                string
 	HomeContent           string
 	HideCcsImportButton   bool
+	ShowGithubButton      bool
+	GithubRepo            string
 
 	PurchaseSubscriptionEnabled bool
 	PurchaseSubscriptionURL     string
