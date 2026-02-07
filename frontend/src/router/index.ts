@@ -389,10 +389,10 @@ router.beforeEach((to, _from, next) => {
 
   // Set page title
   const appStore = useAppStore()
-  const siteName = appStore.siteName || 'Sub2API'
-  if (to.meta.title) {
+  const siteName = appStore.siteName || ''
+  if (to.meta.title && siteName) {
     document.title = `${to.meta.title} - ${siteName}`
-  } else {
+  } else if (siteName) {
     document.title = siteName
   }
 
