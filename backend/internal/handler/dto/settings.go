@@ -35,6 +35,8 @@ type SystemSettings struct {
 	DocURL                      string `json:"doc_url"`
 	HomeContent                 string `json:"home_content"`
 	HideCcsImportButton         bool   `json:"hide_ccs_import_button"`
+	ShowGithubButton            bool   `json:"show_github_button"`
+	GithubRepo                  string `json:"github_repo"`
 	PurchaseSubscriptionEnabled bool   `json:"purchase_subscription_enabled"`
 	PurchaseSubscriptionURL     string `json:"purchase_subscription_url"`
 
@@ -76,6 +78,8 @@ type PublicSettings struct {
 	DocURL                      string `json:"doc_url"`
 	HomeContent                 string `json:"home_content"`
 	HideCcsImportButton         bool   `json:"hide_ccs_import_button"`
+	ShowGithubButton            bool   `json:"show_github_button"`
+	GithubRepo                  string `json:"github_repo"`
 	PurchaseSubscriptionEnabled bool   `json:"purchase_subscription_enabled"`
 	PurchaseSubscriptionURL     string `json:"purchase_subscription_url"`
 	LinuxDoOAuthEnabled         bool   `json:"linuxdo_oauth_enabled"`

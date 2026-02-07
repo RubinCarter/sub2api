@@ -74,6 +74,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyDocURL,
 		SettingKeyHomeContent,
 		SettingKeyHideCcsImportButton,
+		SettingKeyShowGithubButton,
+		SettingKeyGithubRepo,
 		SettingKeyPurchaseSubscriptionEnabled,
 		SettingKeyPurchaseSubscriptionURL,
 		SettingKeyLinuxDoConnectEnabled,
@@ -112,6 +114,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		DocURL:                      settings[SettingKeyDocURL],
 		HomeContent:                 settings[SettingKeyHomeContent],
 		HideCcsImportButton:         settings[SettingKeyHideCcsImportButton] == "true",
+		ShowGithubButton:            settings[SettingKeyShowGithubButton] != "false", // 默认显示
+		GithubRepo:                  settings[SettingKeyGithubRepo],
 		PurchaseSubscriptionEnabled: settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
 		PurchaseSubscriptionURL:     strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		LinuxDoOAuthEnabled:         linuxDoEnabled,
@@ -155,6 +159,8 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		DocURL                      string `json:"doc_url,omitempty"`
 		HomeContent                 string `json:"home_content,omitempty"`
 		HideCcsImportButton         bool   `json:"hide_ccs_import_button"`
+		ShowGithubButton            bool   `json:"show_github_button"`
+		GithubRepo                  string `json:"github_repo,omitempty"`
 		PurchaseSubscriptionEnabled bool   `json:"purchase_subscription_enabled"`
 		PurchaseSubscriptionURL     string `json:"purchase_subscription_url,omitempty"`
 		LinuxDoOAuthEnabled         bool   `json:"linuxdo_oauth_enabled"`
@@ -176,6 +182,8 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		DocURL:                      settings.DocURL,
 		HomeContent:                 settings.HomeContent,
 		HideCcsImportButton:         settings.HideCcsImportButton,
+		ShowGithubButton:            settings.ShowGithubButton,
+		GithubRepo:                  settings.GithubRepo,
 		PurchaseSubscriptionEnabled: settings.PurchaseSubscriptionEnabled,
 		PurchaseSubscriptionURL:     settings.PurchaseSubscriptionURL,
 		LinuxDoOAuthEnabled:         settings.LinuxDoOAuthEnabled,
@@ -230,6 +238,8 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyDocURL] = settings.DocURL
 	updates[SettingKeyHomeContent] = settings.HomeContent
 	updates[SettingKeyHideCcsImportButton] = strconv.FormatBool(settings.HideCcsImportButton)
+	updates[SettingKeyShowGithubButton] = strconv.FormatBool(settings.ShowGithubButton)
+	updates[SettingKeyGithubRepo] = settings.GithubRepo
 	updates[SettingKeyPurchaseSubscriptionEnabled] = strconv.FormatBool(settings.PurchaseSubscriptionEnabled)
 	updates[SettingKeyPurchaseSubscriptionURL] = strings.TrimSpace(settings.PurchaseSubscriptionURL)
 
@@ -434,6 +444,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		DocURL:                       settings[SettingKeyDocURL],
 		HomeContent:                  settings[SettingKeyHomeContent],
 		HideCcsImportButton:          settings[SettingKeyHideCcsImportButton] == "true",
+		ShowGithubButton:             settings[SettingKeyShowGithubButton] != "false", // 默认显示
+		GithubRepo:                   settings[SettingKeyGithubRepo],
 		PurchaseSubscriptionEnabled:  settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
 		PurchaseSubscriptionURL:      strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 	}
