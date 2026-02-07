@@ -92,6 +92,9 @@ type UpdateConfig struct {
 	// 支持 http/https/socks5/socks5h 协议
 	// 例如: "http://127.0.0.1:7890", "socks5://127.0.0.1:1080"
 	ProxyURL string `mapstructure:"proxy_url"`
+	// GithubRepo 更新源 GitHub 仓库（owner/repo 格式）
+	// 默认: "Wei-Shaw/sub2api"
+	GithubRepo string `mapstructure:"github_repo"`
 }
 
 type LinuxDoConnectConfig struct {

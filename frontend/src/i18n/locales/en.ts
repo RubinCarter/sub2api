@@ -3207,7 +3207,12 @@ export default {
         homeContentHint: 'Customize the home page content. Supports Markdown/HTML. If you enter a URL (starting with http:// or https://), it will be used as an iframe src to embed an external page. When set, the default status information will no longer be displayed.',
         homeContentIframeWarning: '⚠️ iframe mode note: Some websites have X-Frame-Options or CSP security policies that prevent embedding in iframes. If the page appears blank or shows an error, please verify the target website allows embedding, or consider using HTML mode to build your own content.',
         hideCcsImportButton: 'Hide CCS Import Button',
-        hideCcsImportButtonHint: 'When enabled, the "Import to CCS" button will be hidden on the API Keys page'
+        hideCcsImportButtonHint: 'When enabled, the "Import to CCS" button will be hidden on the API Keys page',
+        showGithubButton: 'Show GitHub Link',
+        showGithubButtonHint: 'When disabled, the GitHub link button will be hidden from the navigation bar and home page footer',
+        githubRepo: 'GitHub Repository',
+        githubRepoHint: 'Set the GitHub repository (owner/repo format) for update source and page links. Leave empty for default',
+        githubRepoPlaceholder: 'e.g. Wei-Shaw/sub2api'
       },
       purchase: {
         title: 'Purchase Page',

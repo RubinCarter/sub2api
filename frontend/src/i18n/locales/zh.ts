@@ -3382,7 +3382,12 @@ export default {
         homeContentIframeWarning:
           '⚠️ iframe 模式提示：部分网站设置了 X-Frame-Options 或 CSP 安全策略，禁止被嵌入到 iframe 中。如果页面显示空白或报错，请确认目标网站允许被嵌入，或考虑使用 HTML 模式自行构建页面内容。',
         hideCcsImportButton: '隐藏 CCS 导入按钮',
-        hideCcsImportButtonHint: '启用后将在 API Keys 页面隐藏"导入 CCS"按钮'
+        hideCcsImportButtonHint: '启用后将在 API Keys 页面隐藏"导入 CCS"按钮',
+        showGithubButton: '显示 GitHub 链接',
+        showGithubButtonHint: '关闭后将隐藏导航栏和首页页脚中的 GitHub 链接按钮',
+        githubRepo: 'GitHub 仓库',
+        githubRepoHint: '设置 GitHub 仓库地址（owner/repo 格式），用于更新源和页面链接。留空使用默认值',
+        githubRepoPlaceholder: '例如：Wei-Shaw/sub2api'
       },
       purchase: {
         title: '购买订阅页面',
