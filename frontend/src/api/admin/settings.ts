@@ -29,6 +29,8 @@ export interface SystemSettings {
   doc_url: string
   home_content: string
   hide_ccs_import_button: boolean
+  show_github_button: boolean
+  github_repo: string
   purchase_subscription_enabled: boolean
   purchase_subscription_url: string
   // SMTP settings
@@ -85,6 +87,8 @@ export interface UpdateSettingsRequest {
   doc_url?: string
   home_content?: string
   hide_ccs_import_button?: boolean
+  show_github_button?: boolean
+  github_repo?: string
   purchase_subscription_enabled?: boolean
   purchase_subscription_url?: string
   smtp_host?: string

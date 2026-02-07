@@ -805,6 +805,37 @@
               </div>
               <Toggle v-model="form.hide_ccs_import_button" />
             </div>
+
+            <!-- Show GitHub Button -->
+            <div
+              class="flex items-center justify-between border-t border-gray-100 pt-4 dark:border-dark-700"
+            >
+              <div>
+                <label class="font-medium text-gray-900 dark:text-white">{{
+                  t('admin.settings.site.showGithubButton')
+                }}</label>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.site.showGithubButtonHint') }}
+                </p>
+              </div>
+              <Toggle v-model="form.show_github_button" />
+            </div>
+
+            <!-- GitHub Repo -->
+            <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+              <label class="mb-1 block font-medium text-gray-900 dark:text-white">{{
+                t('admin.settings.site.githubRepo')
+              }}</label>
+              <p class="mb-2 text-sm text-gray-500 dark:text-gray-400">
+                {{ t('admin.settings.site.githubRepoHint') }}
+              </p>
+              <input
+                v-model="form.github_repo"
+                type="text"
+                :placeholder="t('admin.settings.site.githubRepoPlaceholder')"
+                class="input w-full"
+              />
+            </div>
           </div>
         </div>
 
@@ -1143,6 +1174,8 @@ const form = reactive<SettingsForm>({
   doc_url: '',
   home_content: '',
   hide_ccs_import_button: false,
+  show_github_button: true,
+  github_repo: '',
   purchase_subscription_enabled: false,
   purchase_subscription_url: '',
   smtp_host: '',
@@ -1271,6 +1304,8 @@ async function saveSettings() {
       doc_url: form.doc_url,
       home_content: form.home_content,
       hide_ccs_import_button: form.hide_ccs_import_button,
+      show_github_button: form.show_github_button,
+      github_repo: form.github_repo,
       purchase_subscription_enabled: form.purchase_subscription_enabled,
       purchase_subscription_url: form.purchase_subscription_url,
       smtp_host: form.smtp_host,
