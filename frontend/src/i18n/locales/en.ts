@@ -3221,9 +3221,9 @@ export default {
         description: 'Show a "Purchase Subscription" entry in the sidebar and open the configured URL in an iframe',
         enabled: 'Show Purchase Entry',
         enabledHint: 'Only shown in standard mode (not simple mode)',
-        url: 'Purchase URL',
-        urlPlaceholder: 'https://example.com/purchase',
-        urlHint: 'Must be an absolute http(s) URL',
+        url: 'Purchase Page Content',
+        urlPlaceholder: 'Enter purchase page content here. Supports Markdown & HTML. If the input is a URL (starting with http:// or https://), it will be used as the iframe src attribute.',
+        urlHint: 'Supports Markdown/HTML content or a full http(s) URL. URLs will be embedded via iframe, other content will be rendered as HTML.',
         iframeWarning:
           '⚠️ iframe note: Some websites block embedding via X-Frame-Options or CSP (frame-ancestors). If the page is blank, provide an "Open in new tab" alternative.'
       },
