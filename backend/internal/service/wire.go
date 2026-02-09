@@ -27,10 +27,14 @@ func ProvidePricingService(cfg *config.Config, remoteClient PricingRemoteClient)
 }
 
 // ProvideUpdateService creates UpdateService with BuildInfo
-func ProvideUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, buildInfo BuildInfo, cfg *config.Config) *UpdateService {
+func ProvideUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, buildInfo BuildInfo, cfg *config.Config, settingRepo SettingRepository) *UpdateService {
 	githubRepo := ""
 	if cfg != nil {
 		githubRepo = cfg.Update.GithubRepo
+	}
+	// 优先从数据库加载 github_repo 设置（管理员在 UI 中配置的值）
+	if dbRepo, err := settingRepo.GetValue(context.Background(), SettingKeyGithubRepo); err == nil && dbRepo != "" {
+		githubRepo = dbRepo
 	}
 	return NewUpdateService(cache, githubClient, buildInfo.Version, buildInfo.BuildType, githubRepo)
 }
