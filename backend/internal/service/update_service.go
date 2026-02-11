@@ -38,6 +38,7 @@ const (
 type UpdateCache interface {
 	GetUpdateInfo(ctx context.Context) (string, error)
 	SetUpdateInfo(ctx context.Context, data string, ttl time.Duration) error
+	ClearUpdateInfo(ctx context.Context) error
 }
 
 // GitHubReleaseClient 获取 GitHub release 信息的接口
@@ -76,10 +77,21 @@ func (s *UpdateService) GetGithubRepo() string {
 }
 
 // SetGithubRepo updates the GitHub repo at runtime (called when settings change)
+// Clears the update cache so the next check queries the new repo immediately.
 func (s *UpdateService) SetGithubRepo(repo string) {
-	if repo != "" {
-		s.githubRepo = repo
+	if repo == "" {
+		repo = DefaultGithubRepo
 	}
+	if repo != s.githubRepo {
+		s.githubRepo = repo
+		// Clear cached update info so next CheckUpdate hits the new repo
+		s.clearCache()
+	}
+}
+
+// clearCache removes the cached update check result from Redis
+func (s *UpdateService) clearCache() {
+	_ = s.cache.ClearUpdateInfo(context.Background())
 }
 
 // UpdateInfo contains update information

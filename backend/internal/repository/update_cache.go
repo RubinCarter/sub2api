@@ -25,3 +25,7 @@ func (c *updateCache) GetUpdateInfo(ctx context.Context) (string, error) {
 func (c *updateCache) SetUpdateInfo(ctx context.Context, data string, ttl time.Duration) error {
 	return c.rdb.Set(ctx, updateCacheKey, data, ttl).Err()
 }
+
+func (c *updateCache) ClearUpdateInfo(ctx context.Context) error {
+	return c.rdb.Del(ctx, updateCacheKey).Err()
+}

@@ -364,8 +364,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 
 	h.auditSettingsUpdate(c, previousSettings, settings, req)
 
-	// 同步 GitHub Repo 到 UpdateService（运行时生效）
-	if h.updateService != nil && req.GithubRepo != "" {
+	// 同步 GitHub Repo 到 UpdateService（运行时生效，空值会回退到默认仓库）
+	if h.updateService != nil {
 		h.updateService.SetGithubRepo(req.GithubRepo)
 	}
 
