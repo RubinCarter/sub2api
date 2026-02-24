@@ -39,17 +39,6 @@ watch(
   { immediate: true }
 )
 
-watch(
-  () => [appStore.siteName, appStore.cachedPublicSettings?.site_subtitle],
-  ([newName, newSubtitle]) => {
-    if (newName) {
-      const subtitle = newSubtitle || 'AI API Gateway'
-      document.title = `${newName} - ${subtitle}`
-    }
-  },
-  { immediate: true }
-)
-
 // Watch for authentication state and manage subscription data
 watch(
   () => authStore.isAuthenticated,
