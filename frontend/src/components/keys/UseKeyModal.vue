@@ -139,6 +139,7 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
+import { useAppStore } from '@/stores/app'
 import type { GroupPlatform } from '@/types'
 
 interface Props {
@@ -170,6 +171,13 @@ const emit = defineEmits<Emits>()
 
 const { t } = useI18n()
 const { copyToClipboard: clipboardCopy } = useClipboard()
+const appStore = useAppStore()
+
+// Provider name for Codex CLI config: use site_name (lowercase, no spaces) or fallback to 'sub2api'
+const codexProviderName = computed(() => {
+  const name = appStore.cachedPublicSettings?.site_name || appStore.siteName || 'sub2api'
+  return name.toLowerCase().replace(/\s+/g, '-')
+})
 
 const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
@@ -492,7 +500,8 @@ function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
   // config.toml content
-  const configContent = `model_provider = "sub2api"
+  const providerName = codexProviderName.value
+  const configContent = `model_provider = "${providerName}"
 model = "gpt-5.3-codex"
 model_reasoning_effort = "high"
 network_access = "enabled"
@@ -500,8 +509,8 @@ disable_response_storage = true
 windows_wsl_setup_acknowledged = true
 model_verbosity = "high"
 
-[model_providers.sub2api]
-name = "sub2api"
+[model_providers.${providerName}]
+name = "${providerName}"
 base_url = "${baseUrl}"
 wire_api = "responses"
 requires_openai_auth = true`
