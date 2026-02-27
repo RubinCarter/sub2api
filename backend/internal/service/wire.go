@@ -214,14 +214,14 @@ func ProvideSoraMediaStorage(cfg *config.Config) *SoraMediaStorage {
 	return NewSoraMediaStorage(cfg)
 }
 
-func ProvideSoraDirectClient(
+func ProvideSoraSDKClient(
 	cfg *config.Config,
 	httpUpstream HTTPUpstream,
 	tokenProvider *OpenAITokenProvider,
 	accountRepo AccountRepository,
 	soraAccountRepo SoraAccountRepository,
-) *SoraDirectClient {
-	client := NewSoraDirectClient(cfg, httpUpstream, tokenProvider)
+) *SoraSDKClient {
+	client := NewSoraSDKClient(cfg, httpUpstream, tokenProvider)
 	client.SetAccountRepositories(accountRepo, soraAccountRepo)
 	return client
 }
@@ -314,8 +314,8 @@ var ProviderSet = wire.NewSet(
 	NewGatewayService,
 	ProvideSoraMediaStorage,
 	ProvideSoraMediaCleanupService,
-	ProvideSoraDirectClient,
-	wire.Bind(new(SoraClient), new(*SoraDirectClient)),
+	ProvideSoraSDKClient,
+	wire.Bind(new(SoraClient), new(*SoraSDKClient)),
 	NewSoraGatewayService,
 	NewOpenAIGatewayService,
 	NewOAuthService,
