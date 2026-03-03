@@ -182,6 +182,12 @@ func (r *stubAccountRepo) ListSchedulableByPlatforms(ctx context.Context, platfo
 func (r *stubAccountRepo) ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]service.Account, error) {
 	return r.ListSchedulableByPlatforms(ctx, platforms)
 }
+func (r *stubAccountRepo) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
+	return r.ListSchedulableByPlatform(ctx, platform)
+}
+func (r *stubAccountRepo) ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]service.Account, error) {
+	return r.ListSchedulableByPlatforms(ctx, platforms)
+}
 func (r *stubAccountRepo) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
 	return nil
 }
@@ -405,7 +411,7 @@ func TestSoraGatewayHandler_ChatCompletions(t *testing.T) {
 	deferredService := service.NewDeferredService(accountRepo, nil, 0)
 	billingService := service.NewBillingService(cfg, nil)
 	concurrencyService := service.NewConcurrencyService(testutil.StubConcurrencyCache{})
-	billingCacheService := service.NewBillingCacheService(nil, nil, nil, cfg)
+	billingCacheService := service.NewBillingCacheService(nil, nil, nil, nil, cfg)
 	t.Cleanup(func() {
 		billingCacheService.Stop()
 	})

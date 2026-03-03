@@ -566,6 +566,19 @@ export default {
     resetQuotaConfirmMessage: '确定要将密钥 "{name}" 的已用额度（${used}）重置为 0 吗？此操作不可撤销。',
     quotaResetSuccess: '额度重置成功',
     failedToResetQuota: '重置额度失败',
+    rateLimitColumn: '速率限制',
+    rateLimitSection: '速率限制',
+    resetUsage: '重置',
+    rateLimit5h: '5小时限额 (USD)',
+    rateLimit1d: '日限额 (USD)',
+    rateLimit7d: '7天限额 (USD)',
+    rateLimitHint: '设置此密钥在指定时间窗口内的最大消费额。0 = 无限制。',
+    rateLimitUsage: '速率限制用量',
+    resetRateLimitUsage: '重置速率限制用量',
+    resetRateLimitTitle: '确认重置速率限制',
+    resetRateLimitConfirmMessage: '确定要重置密钥 "{name}" 的速率限制用量吗？所有时间窗口的已用额度将归零。此操作不可撤销。',
+    rateLimitResetSuccess: '速率限制已重置',
+    failedToResetRateLimit: '重置速率限制失败',
     expiration: '密钥有效期',
     expiresInDays: '{days} 天',
     extendDays: '+{days} 天',
@@ -3745,6 +3758,12 @@ export default {
         minVersion: '最低版本号',
         minVersionPlaceholder: '例如 2.1.63',
         minVersionHint: '拒绝低于此版本的 Claude Code 客户端请求（semver 格式）。留空则不检查版本。'
+      },
+      scheduling: {
+        title: '网关调度设置',
+        description: '控制 API Key 的调度行为',
+        allowUngroupedKey: '允许未分组 Key 调度',
+        allowUngroupedKeyHint: '关闭后，未分配到任何分组的 API Key 将无法发起请求（返回 403）。建议保持关闭以确保所有 Key 都归属明确的分组。'
       },
       site: {
         title: '站点设置',

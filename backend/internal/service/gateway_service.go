@@ -1782,8 +1782,10 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		var err error
 		if groupID != nil {
 			accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, *groupID, platforms)
-		} else {
+		} else if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 			accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
+		} else {
+			accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
 		}
 		if err != nil {
 			slog.Debug("account_scheduling_list_failed",
@@ -1824,7 +1826,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, platform)
 		// 分组内无账号则返回空列表，由上层处理错误，不再回退到全平台查询
 	} else {
-		accounts, err = s.accountRepo.ListSchedulableByPlatform(ctx, platform)
+		accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, platform)
 	}
 	if err != nil {
 		slog.Debug("account_scheduling_list_failed",
@@ -1964,13 +1966,14 @@ func (s *GatewayService) isAccountSchedulableForModelSelection(ctx context.Conte
 }
 
 // isAccountInGroup checks if the account belongs to the specified group.
-// Returns true if groupID is nil (no group restriction) or account belongs to the group.
+// When groupID is nil, returns true only for ungrouped accounts (no group assignments).
 func (s *GatewayService) isAccountInGroup(account *Account, groupID *int64) bool {
-	if groupID == nil {
-		return true // 无分组限制
-	}
 	if account == nil {
 		return false
+	}
+	if groupID == nil {
+		// 无分组的 API Key 只能使用未分组的账号
+		return len(account.AccountGroups) == 0
 	}
 	for _, ag := range account.AccountGroups {
 		if ag.GroupID == *groupID {
@@ -6361,9 +6364,10 @@ type RecordUsageInput struct {
 	APIKeyService     APIKeyQuotaUpdater // 可选：用于更新API Key配额
 }
 
-// APIKeyQuotaUpdater defines the interface for updating API Key quota
+// APIKeyQuotaUpdater defines the interface for updating API Key quota and rate limit usage
 type APIKeyQuotaUpdater interface {
 	UpdateQuotaUsed(ctx context.Context, apiKeyID int64, cost float64) error
+	UpdateRateLimitUsage(ctx context.Context, apiKeyID int64, cost float64) error
 }
 
 // RecordUsage 记录使用量并扣费（或更新订阅用量）
@@ -6557,6 +6561,14 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		}
 	}
 
+	// Update API Key rate limit usage
+	if shouldBill && cost.ActualCost > 0 && apiKey.HasRateLimits() && input.APIKeyService != nil {
+		if err := input.APIKeyService.UpdateRateLimitUsage(ctx, apiKey.ID, cost.ActualCost); err != nil {
+			logger.LegacyPrintf("service.gateway", "Update API key rate limit usage failed: %v", err)
+		}
+		s.billingCacheService.QueueUpdateAPIKeyRateLimitUsage(apiKey.ID, cost.ActualCost)
+	}
+
 	// Schedule batch update for account last_used_at
 	s.deferredService.ScheduleLastUsedUpdate(account.ID)
 
@@ -6744,6 +6756,14 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 				}
 			}
 		}
+	}
+
+	// Update API Key rate limit usage
+	if shouldBill && cost.ActualCost > 0 && apiKey.HasRateLimits() && input.APIKeyService != nil {
+		if err := input.APIKeyService.UpdateRateLimitUsage(ctx, apiKey.ID, cost.ActualCost); err != nil {
+			logger.LegacyPrintf("service.gateway", "Update API key rate limit usage failed: %v", err)
+		}
+		s.billingCacheService.QueueUpdateAPIKeyRateLimitUsage(apiKey.ID, cost.ActualCost)
 	}
 
 	// Schedule batch update for account last_used_at

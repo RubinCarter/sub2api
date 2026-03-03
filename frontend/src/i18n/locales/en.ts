@@ -560,6 +560,19 @@ export default {
     resetQuotaConfirmMessage: 'Are you sure you want to reset the used quota (${used}) for key "{name}" to 0? This action cannot be undone.',
     quotaResetSuccess: 'Quota reset successfully',
     failedToResetQuota: 'Failed to reset quota',
+    rateLimitColumn: 'Rate Limit',
+    rateLimitSection: 'Rate Limit',
+    resetUsage: 'Reset',
+    rateLimit5h: '5-Hour Limit (USD)',
+    rateLimit1d: 'Daily Limit (USD)',
+    rateLimit7d: '7-Day Limit (USD)',
+    rateLimitHint: 'Set the maximum spending for this key within each time window. 0 = unlimited.',
+    rateLimitUsage: 'Rate Limit Usage',
+    resetRateLimitUsage: 'Reset Rate Limit Usage',
+    resetRateLimitTitle: 'Confirm Reset Rate Limit',
+    resetRateLimitConfirmMessage: 'Are you sure you want to reset the rate limit usage for key "{name}"? All time window usage will be reset to zero. This action cannot be undone.',
+    rateLimitResetSuccess: 'Rate limit usage reset successfully',
+    failedToResetRateLimit: 'Failed to reset rate limit usage',
     expiration: 'Expiration',
     expiresInDays: '{days} days',
     extendDays: '+{days} days',
@@ -3577,6 +3590,12 @@ export default {
         minVersionPlaceholder: 'e.g. 2.1.63',
         minVersionHint:
           'Reject Claude Code clients below this version (semver format). Leave empty to disable version check.'
+      },
+      scheduling: {
+        title: 'Gateway Scheduling Settings',
+        description: 'Control API Key scheduling behavior',
+        allowUngroupedKey: 'Allow Ungrouped Key Scheduling',
+        allowUngroupedKeyHint: 'When disabled, API Keys not assigned to any group cannot make requests (403 Forbidden). Keep disabled to ensure all Keys belong to a specific group.'
       },
       site: {
         title: 'Site Settings',
