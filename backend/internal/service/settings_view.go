@@ -1,12 +1,13 @@
 package service
 
 type SystemSettings struct {
-	RegistrationEnabled   bool
-	EmailVerifyEnabled    bool
-	PromoCodeEnabled      bool
-	PasswordResetEnabled  bool
-	InvitationCodeEnabled bool
-	TotpEnabled           bool // TOTP 双因素认证
+	RegistrationEnabled              bool
+	EmailVerifyEnabled               bool
+	RegistrationEmailSuffixWhitelist []string
+	PromoCodeEnabled                 bool
+	PasswordResetEnabled             bool
+	InvitationCodeEnabled            bool
+	TotpEnabled                      bool // TOTP 双因素认证
 
 	SMTPHost               string
 	SMTPPort               int
@@ -78,24 +79,25 @@ type DefaultSubscriptionSetting struct {
 }
 
 type PublicSettings struct {
-	RegistrationEnabled   bool
-	EmailVerifyEnabled    bool
-	PromoCodeEnabled      bool
-	PasswordResetEnabled  bool
-	InvitationCodeEnabled bool
-	TotpEnabled           bool // TOTP 双因素认证
-	TurnstileEnabled      bool
-	TurnstileSiteKey      string
-	SiteName              string
-	SiteLogo              string
-	SiteSubtitle          string
-	APIBaseURL            string
-	ContactInfo           string
-	DocURL                string
-	HomeContent           string
-	HideCcsImportButton   bool
-	ShowGithubButton      bool
-	GithubRepo            string
+	RegistrationEnabled              bool
+	EmailVerifyEnabled               bool
+	RegistrationEmailSuffixWhitelist []string
+	PromoCodeEnabled                 bool
+	PasswordResetEnabled             bool
+	InvitationCodeEnabled            bool
+	TotpEnabled                      bool // TOTP 双因素认证
+	TurnstileEnabled                 bool
+	TurnstileSiteKey                 string
+	SiteName                         string
+	SiteLogo                         string
+	SiteSubtitle                     string
+	APIBaseURL                       string
+	ContactInfo                      string
+	DocURL                           string
+	HomeContent                      string
+	HideCcsImportButton              bool
+	ShowGithubButton                 bool
+	GithubRepo                       string
 
 	PurchaseSubscriptionEnabled bool
 	PurchaseSubscriptionURL     string
