@@ -102,6 +102,7 @@ type CreateAccountRequest struct {
 	Concurrency             int            `json:"concurrency"`
 	Priority                int            `json:"priority"`
 	RateMultiplier          *float64       `json:"rate_multiplier"`
+	LoadFactor              *int           `json:"load_factor"`
 	GroupIDs                []int64        `json:"group_ids"`
 	ExpiresAt               *int64         `json:"expires_at"`
 	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
@@ -120,6 +121,7 @@ type UpdateAccountRequest struct {
 	Concurrency             *int           `json:"concurrency"`
 	Priority                *int           `json:"priority"`
 	RateMultiplier          *float64       `json:"rate_multiplier"`
+	LoadFactor              *int           `json:"load_factor"`
 	Status                  string         `json:"status" binding:"omitempty,oneof=active inactive"`
 	GroupIDs                *[]int64       `json:"group_ids"`
 	ExpiresAt               *int64         `json:"expires_at"`
@@ -135,6 +137,7 @@ type BulkUpdateAccountsRequest struct {
 	Concurrency             *int           `json:"concurrency"`
 	Priority                *int           `json:"priority"`
 	RateMultiplier          *float64       `json:"rate_multiplier"`
+	LoadFactor              *int           `json:"load_factor"`
 	Status                  string         `json:"status" binding:"omitempty,oneof=active inactive error"`
 	Schedulable             *bool          `json:"schedulable"`
 	GroupIDs                *[]int64       `json:"group_ids"`
@@ -240,77 +243,77 @@ func (h *AccountHandler) List(c *gin.Context) {
 	var windowCosts map[int64]float64
 	var activeSessions map[int64]int
 	var rpmCounts map[int64]int
-	if !lite {
-		// Get current concurrency counts for all accounts
-		if h.concurrencyService != nil {
-			if cc, ccErr := h.concurrencyService.GetAccountConcurrencyBatch(c.Request.Context(), accountIDs); ccErr == nil && cc != nil {
-				concurrencyCounts = cc
+
+	// 始终获取并发数（Redis ZCARD，极低开销）
+	if h.concurrencyService != nil {
+		if cc, ccErr := h.concurrencyService.GetAccountConcurrencyBatch(c.Request.Context(), accountIDs); ccErr == nil && cc != nil {
+			concurrencyCounts = cc
+		}
+	}
+
+	// 识别需要查询窗口费用、会话数和 RPM 的账号（Anthropic OAuth/SetupToken 且启用了相应功能）
+	windowCostAccountIDs := make([]int64, 0)
+	sessionLimitAccountIDs := make([]int64, 0)
+	rpmAccountIDs := make([]int64, 0)
+	sessionIdleTimeouts := make(map[int64]time.Duration) // 各账号的会话空闲超时配置
+	for i := range accounts {
+		acc := &accounts[i]
+		if acc.IsAnthropicOAuthOrSetupToken() {
+			if acc.GetWindowCostLimit() > 0 {
+				windowCostAccountIDs = append(windowCostAccountIDs, acc.ID)
+			}
+			if acc.GetMaxSessions() > 0 {
+				sessionLimitAccountIDs = append(sessionLimitAccountIDs, acc.ID)
+				sessionIdleTimeouts[acc.ID] = time.Duration(acc.GetSessionIdleTimeoutMinutes()) * time.Minute
+			}
+			if acc.GetBaseRPM() > 0 {
+				rpmAccountIDs = append(rpmAccountIDs, acc.ID)
 			}
 		}
-		// 识别需要查询窗口费用、会话数和 RPM 的账号（Anthropic OAuth/SetupToken 且启用了相应功能）
-		windowCostAccountIDs := make([]int64, 0)
-		sessionLimitAccountIDs := make([]int64, 0)
-		rpmAccountIDs := make([]int64, 0)
-		sessionIdleTimeouts := make(map[int64]time.Duration) // 各账号的会话空闲超时配置
+	}
+
+	// 始终获取 RPM 计数（Redis GET，极低开销）
+	if len(rpmAccountIDs) > 0 && h.rpmCache != nil {
+		rpmCounts, _ = h.rpmCache.GetRPMBatch(c.Request.Context(), rpmAccountIDs)
+		if rpmCounts == nil {
+			rpmCounts = make(map[int64]int)
+		}
+	}
+
+	// 始终获取活跃会话数（Redis ZCARD，低开销）
+	if len(sessionLimitAccountIDs) > 0 && h.sessionLimitCache != nil {
+		activeSessions, _ = h.sessionLimitCache.GetActiveSessionCountBatch(c.Request.Context(), sessionLimitAccountIDs, sessionIdleTimeouts)
+		if activeSessions == nil {
+			activeSessions = make(map[int64]int)
+		}
+	}
+
+	// 始终获取窗口费用（PostgreSQL 聚合查询）
+	if len(windowCostAccountIDs) > 0 {
+		windowCosts = make(map[int64]float64)
+		var mu sync.Mutex
+		g, gctx := errgroup.WithContext(c.Request.Context())
+		g.SetLimit(10) // 限制并发数
+
 		for i := range accounts {
 			acc := &accounts[i]
-			if acc.IsAnthropicOAuthOrSetupToken() {
-				if acc.GetWindowCostLimit() > 0 {
-					windowCostAccountIDs = append(windowCostAccountIDs, acc.ID)
-				}
-				if acc.GetMaxSessions() > 0 {
-					sessionLimitAccountIDs = append(sessionLimitAccountIDs, acc.ID)
-					sessionIdleTimeouts[acc.ID] = time.Duration(acc.GetSessionIdleTimeoutMinutes()) * time.Minute
-				}
-				if acc.GetBaseRPM() > 0 {
-					rpmAccountIDs = append(rpmAccountIDs, acc.ID)
-				}
+			if !acc.IsAnthropicOAuthOrSetupToken() || acc.GetWindowCostLimit() <= 0 {
+				continue
 			}
-		}
-
-		// 获取 RPM 计数（批量查询）
-		if len(rpmAccountIDs) > 0 && h.rpmCache != nil {
-			rpmCounts, _ = h.rpmCache.GetRPMBatch(c.Request.Context(), rpmAccountIDs)
-			if rpmCounts == nil {
-				rpmCounts = make(map[int64]int)
-			}
-		}
-
-		// 获取活跃会话数（批量查询，传入各账号的 idleTimeout 配置）
-		if len(sessionLimitAccountIDs) > 0 && h.sessionLimitCache != nil {
-			activeSessions, _ = h.sessionLimitCache.GetActiveSessionCountBatch(c.Request.Context(), sessionLimitAccountIDs, sessionIdleTimeouts)
-			if activeSessions == nil {
-				activeSessions = make(map[int64]int)
-			}
-		}
-
-		// 获取窗口费用（并行查询）
-		if len(windowCostAccountIDs) > 0 {
-			windowCosts = make(map[int64]float64)
-			var mu sync.Mutex
-			g, gctx := errgroup.WithContext(c.Request.Context())
-			g.SetLimit(10) // 限制并发数
-
-			for i := range accounts {
-				acc := &accounts[i]
-				if !acc.IsAnthropicOAuthOrSetupToken() || acc.GetWindowCostLimit() <= 0 {
-					continue
+			accCopy := acc // 闭包捕获
+			g.Go(func() error {
+				// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）
+				startTime := accCopy.GetCurrentWindowStartTime()
+				stats, err := h.accountUsageService.GetAccountWindowStats(gctx, accCopy.ID, startTime)
+				if err == nil && stats != nil {
+					mu.Lock()
+					windowCosts[accCopy.ID] = stats.StandardCost // 使用标准费用
+					mu.Unlock()
 				}
-				accCopy := acc // 闭包捕获
-				g.Go(func() error {
-					// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）
-					startTime := accCopy.GetCurrentWindowStartTime()
-					stats, err := h.accountUsageService.GetAccountWindowStats(gctx, accCopy.ID, startTime)
-					if err == nil && stats != nil {
-						mu.Lock()
-						windowCosts[accCopy.ID] = stats.StandardCost // 使用标准费用
-						mu.Unlock()
-					}
-					return nil // 不返回错误，允许部分失败
-				})
-			}
-			_ = g.Wait()
+				return nil // 不返回错误，允许部分失败
+			})
 		}
+		_ = g.Wait()
 	}
 
 	// Build response with concurrency info
@@ -506,6 +509,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			Concurrency:           req.Concurrency,
 			Priority:              req.Priority,
 			RateMultiplier:        req.RateMultiplier,
+			LoadFactor:            req.LoadFactor,
 			GroupIDs:              req.GroupIDs,
 			ExpiresAt:             req.ExpiresAt,
 			AutoPauseOnExpired:    req.AutoPauseOnExpired,
@@ -575,6 +579,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		Concurrency:           req.Concurrency, // 指针类型，nil 表示未提供
 		Priority:              req.Priority,    // 指针类型，nil 表示未提供
 		RateMultiplier:        req.RateMultiplier,
+		LoadFactor:            req.LoadFactor,
 		Status:                req.Status,
 		GroupIDs:              req.GroupIDs,
 		ExpiresAt:             req.ExpiresAt,
@@ -1101,6 +1106,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		req.Concurrency != nil ||
 		req.Priority != nil ||
 		req.RateMultiplier != nil ||
+		req.LoadFactor != nil ||
 		req.Status != "" ||
 		req.Schedulable != nil ||
 		req.GroupIDs != nil ||
@@ -1119,6 +1125,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		Concurrency:           req.Concurrency,
 		Priority:              req.Priority,
 		RateMultiplier:        req.RateMultiplier,
+		LoadFactor:            req.LoadFactor,
 		Status:                req.Status,
 		Schedulable:           req.Schedulable,
 		GroupIDs:              req.GroupIDs,
@@ -1316,6 +1323,29 @@ func (h *AccountHandler) ClearRateLimit(c *gin.Context) {
 	err = h.rateLimitService.ClearRateLimit(c.Request.Context(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
+		return
+	}
+
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
+// ResetQuota handles resetting account quota usage
+// POST /api/v1/admin/accounts/:id/reset-quota
+func (h *AccountHandler) ResetQuota(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	if err := h.adminService.ResetAccountQuota(c.Request.Context(), accountID); err != nil {
+		response.InternalError(c, "Failed to reset account quota: "+err.Error())
 		return
 	}
 
