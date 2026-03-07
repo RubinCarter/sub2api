@@ -157,6 +157,7 @@ export interface UpdateSubscriptionRequest {
 // ==================== Announcement Types ====================
 
 export type AnnouncementStatus = 'draft' | 'active' | 'archived'
+export type AnnouncementNotifyMode = 'silent' | 'popup'
 
 export type AnnouncementConditionType = 'subscription' | 'balance'
 
@@ -182,6 +183,7 @@ export interface Announcement {
   title: string
   content: string
   status: AnnouncementStatus
+  notify_mode: AnnouncementNotifyMode
   targeting: AnnouncementTargeting
   starts_at?: string
   ends_at?: string
@@ -195,6 +197,7 @@ export interface UserAnnouncement {
   id: number
   title: string
   content: string
+  notify_mode: AnnouncementNotifyMode
   starts_at?: string
   ends_at?: string
   read_at?: string
@@ -206,6 +209,7 @@ export interface CreateAnnouncementRequest {
   title: string
   content: string
   status?: AnnouncementStatus
+  notify_mode?: AnnouncementNotifyMode
   targeting: AnnouncementTargeting
   starts_at?: number
   ends_at?: number
@@ -215,6 +219,7 @@ export interface UpdateAnnouncementRequest {
   title?: string
   content?: string
   status?: AnnouncementStatus
+  notify_mode?: AnnouncementNotifyMode
   targeting?: AnnouncementTargeting
   starts_at?: number
   ends_at?: number
@@ -386,6 +391,8 @@ export interface Group {
   claude_code_only: boolean
   fallback_group_id: number | null
   fallback_group_id_on_invalid_request: number | null
+  // OpenAI Messages 调度开关（用户侧需要此字段判断是否展示 Claude Code 教程）
+  allow_messages_dispatch?: boolean
   created_at: string
   updated_at: string
 }
@@ -403,6 +410,9 @@ export interface AdminGroup extends Group {
 
   // 分组下账号数量（仅管理员可见）
   account_count?: number
+
+  // OpenAI Messages 调度配置（仅 openai 平台使用）
+  default_mapped_model?: string
 
   // 分组排序
   sort_order: number
@@ -811,7 +821,7 @@ export interface UpdateAccountRequest {
   priority?: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
   schedulable?: boolean
-  status?: 'active' | 'inactive'
+  status?: 'active' | 'inactive' | 'error'
   group_ids?: number[]
   expires_at?: number | null
   auto_pause_on_expired?: boolean

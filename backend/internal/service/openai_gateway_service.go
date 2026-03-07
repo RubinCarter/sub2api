@@ -207,12 +207,18 @@ type OpenAIUsage struct {
 type OpenAIForwardResult struct {
 	RequestID string
 	Usage     OpenAIUsage
-	Model     string
+	Model     string // 原始模型（用于响应和日志显示）
+	// BillingModel is the model used for cost calculation.
+	// When non-empty, CalculateCost uses this instead of Model.
+	// This is set by the Anthropic Messages conversion path where
+	// the mapped upstream model differs from the client-facing model.
+	BillingModel string
 	// ReasoningEffort is extracted from request body (reasoning.effort) or derived from model suffix.
 	// Stored for usage records display; nil means not provided / not applicable.
 	ReasoningEffort *string
 	Stream          bool
 	OpenAIWSMode    bool
+	ResponseHeaders http.Header
 	Duration        time.Duration
 	FirstTokenMs    *int
 }
@@ -828,8 +834,10 @@ func logOpenAIInstructionsRequiredDebug(
 	}
 
 	userAgent := ""
+	originator := ""
 	if c != nil {
 		userAgent = strings.TrimSpace(c.GetHeader("User-Agent"))
+		originator = strings.TrimSpace(c.GetHeader("originator"))
 	}
 
 	fields := []zap.Field{
@@ -839,7 +847,7 @@ func logOpenAIInstructionsRequiredDebug(
 		zap.Int("upstream_status_code", upstreamStatusCode),
 		zap.String("upstream_error_message", msg),
 		zap.String("request_user_agent", userAgent),
-		zap.Bool("codex_official_client_match", openai.IsCodexCLIRequest(userAgent)),
+		zap.Bool("codex_official_client_match", openai.IsCodexOfficialClientByHeaders(userAgent, originator)),
 	}
 	fields = appendCodexCLIOnlyRejectedRequestFields(fields, c, requestBody)
 
@@ -960,6 +968,18 @@ func (s *OpenAIGatewayService) GenerateSessionHashWithFallback(c *gin.Context, b
 	currentHash, legacyHash := deriveOpenAISessionHashes(seed)
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
 	return currentHash
+}
+
+func resolveOpenAIUpstreamOriginator(c *gin.Context, isOfficialClient bool) string {
+	if c != nil {
+		if originator := strings.TrimSpace(c.GetHeader("originator")); originator != "" {
+			return originator
+		}
+	}
+	if isOfficialClient {
+		return "codex_cli_rs"
+	}
+	return "opencode"
 }
 
 // BindStickySession sets session -> account binding with standard TTL.
@@ -1483,7 +1503,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	reqModel, reqStream, promptCacheKey := extractOpenAIRequestMetaFromBody(body)
 	originalModel := reqModel
 
-	isCodexCLI := openai.IsCodexCLIRequest(c.GetHeader("User-Agent")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
+	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	clientTransport := GetOpenAIClientTransport(c)
 	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
@@ -1591,13 +1611,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		patchDisabled = true
 	}
 
-	// 非透传模式下，保持历史行为：非 Codex CLI 请求在 instructions 为空时注入默认指令。
-	if !isCodexCLI && isInstructionsEmpty(reqBody) {
-		if instructions := strings.TrimSpace(GetOpenCodeInstructions()); instructions != "" {
-			reqBody["instructions"] = instructions
-			bodyModified = true
-			markPatchSet("instructions", instructions)
-		}
+	// 非透传模式下，instructions 为空时注入默认指令。
+	if isInstructionsEmpty(reqBody) {
+		reqBody["instructions"] = "You are a helpful coding assistant."
+		bodyModified = true
+		markPatchSet("instructions", "You are a helpful coding assistant.")
 	}
 
 	// 对所有请求执行模型映射（包含 Codex CLI）。
@@ -2658,11 +2676,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	}
 	if account.Type == AccountTypeOAuth {
 		req.Header.Set("OpenAI-Beta", "responses=experimental")
-		if isCodexCLI {
-			req.Header.Set("originator", "codex_cli_rs")
-		} else {
-			req.Header.Set("originator", "opencode")
-		}
+		req.Header.Set("originator", resolveOpenAIUpstreamOriginator(c, isCodexCLI))
 		if isOpenAIResponsesCompactPath(c) {
 			req.Header.Set("accept", "application/json")
 			if req.Header.Get("version") == "" {
@@ -3610,7 +3624,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		multiplier = resolver.Resolve(ctx, user.ID, *apiKey.GroupID, apiKey.Group.RateMultiplier)
 	}
 
-	cost, err := s.billingService.CalculateCost(result.Model, tokens, multiplier)
+	billingModel := result.Model
+	if result.BillingModel != "" {
+		billingModel = result.BillingModel
+	}
+	cost, err := s.billingService.CalculateCost(billingModel, tokens, multiplier)
 	if err != nil {
 		cost = &CostBreakdown{ActualCost: 0}
 	}
@@ -3630,7 +3648,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		APIKeyID:              apiKey.ID,
 		AccountID:             account.ID,
 		RequestID:             result.RequestID,
-		Model:                 result.Model,
+		Model:                 billingModel,
 		ReasoningEffort:       result.ReasoningEffort,
 		InputTokens:           actualInputTokens,
 		OutputTokens:          result.Usage.OutputTokens,
@@ -3873,6 +3891,15 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 		defer cancel()
 		_ = s.accountRepo.UpdateExtra(updateCtx, accountID, updates)
 	}()
+}
+
+func (s *OpenAIGatewayService) UpdateCodexUsageSnapshotFromHeaders(ctx context.Context, accountID int64, headers http.Header) {
+	if accountID <= 0 || headers == nil {
+		return
+	}
+	if snapshot := ParseCodexRateLimitHeaders(headers); snapshot != nil {
+		s.updateCodexUsageSnapshot(ctx, accountID, snapshot)
+	}
 }
 
 func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any) (value string, present bool) {

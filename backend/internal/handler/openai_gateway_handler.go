@@ -319,6 +319,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 		if result != nil {
+			if account.Type == service.AccountTypeOAuth {
+				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
+			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
 		} else {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil)
@@ -464,6 +467,14 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		zap.Int64("api_key_id", apiKey.ID),
 		zap.Any("group_id", apiKey.GroupID),
 	)
+
+	// 检查分组是否允许 /v1/messages 调度
+	if apiKey.Group != nil && !apiKey.Group.AllowMessagesDispatch {
+		h.anthropicErrorResponse(c, http.StatusForbidden, "permission_error",
+			"This group does not allow /v1/messages dispatch")
+		return
+	}
+
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
 	}
@@ -499,6 +510,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	setOpsRequestContext(c, reqModel, reqStream, body)
 
+	// 绑定错误透传服务，允许 service 层在非 failover 错误场景复用规则。
+	if h.errorPassthroughService != nil {
+		service.BindErrorPassthroughService(c, h.errorPassthroughService)
+	}
+
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
@@ -528,6 +544,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 
 	for {
+		// 清除上一次迭代的降级模型标记，避免残留影响本次迭代
+		c.Set("openai_messages_fallback_model", "")
 		reqLog.Debug("openai_messages.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithScheduler(
 			c.Request.Context(),
@@ -543,16 +561,41 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				zap.Error(err),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			// 首次调度失败 + 有默认映射模型 → 用默认模型重试
 			if len(failedAccountIDs) == 0 {
-				h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
+				defaultModel := ""
+				if apiKey.Group != nil {
+					defaultModel = apiKey.Group.DefaultMappedModel
+				}
+				if defaultModel != "" && defaultModel != reqModel {
+					reqLog.Info("openai_messages.fallback_to_default_model",
+						zap.String("default_mapped_model", defaultModel),
+					)
+					selection, scheduleDecision, err = h.gatewayService.SelectAccountWithScheduler(
+						c.Request.Context(),
+						apiKey.GroupID,
+						"",
+						sessionHash,
+						defaultModel,
+						failedAccountIDs,
+						service.OpenAIUpstreamTransportAny,
+					)
+					if err == nil && selection != nil {
+						c.Set("openai_messages_fallback_model", defaultModel)
+					}
+				}
+				if err != nil {
+					h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
+					return
+				}
+			} else {
+				if lastFailoverErr != nil {
+					h.handleAnthropicFailoverExhausted(c, lastFailoverErr, streamStarted)
+				} else {
+					h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", "Upstream request failed", streamStarted)
+				}
 				return
 			}
-			if lastFailoverErr != nil {
-				h.handleAnthropicFailoverExhausted(c, lastFailoverErr, streamStarted)
-			} else {
-				h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", "Upstream request failed", streamStarted)
-			}
-			return
 		}
 		if selection == nil || selection.Account == nil {
 			h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", streamStarted)
@@ -571,7 +614,15 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		forwardStart := time.Now()
 
-		result, err := h.gatewayService.ForwardAsAnthropic(c.Request.Context(), c, account, body, promptCacheKey)
+		defaultMappedModel := ""
+		if apiKey.Group != nil {
+			defaultMappedModel = apiKey.Group.DefaultMappedModel
+		}
+		// 如果使用了降级模型调度，强制使用降级模型
+		if fallbackModel := c.GetString("openai_messages_fallback_model"); fallbackModel != "" {
+			defaultMappedModel = fallbackModel
+		}
+		result, err := h.gatewayService.ForwardAsAnthropic(c.Request.Context(), c, account, body, promptCacheKey, defaultMappedModel)
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		if accountReleaseFunc != nil {
@@ -670,8 +721,14 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 	if streamStarted {
 		flusher, ok := c.Writer.(http.Flusher)
 		if ok {
-			errorEvent := "event: error\ndata: " + `{"type":"error","error":{"type":` + strconv.Quote(errType) + `,"message":` + strconv.Quote(message) + `}}` + "\n\n"
-			fmt.Fprint(c.Writer, errorEvent) //nolint:errcheck
+			errPayload, _ := json.Marshal(gin.H{
+				"type": "error",
+				"error": gin.H{
+					"type":    errType,
+					"message": message,
+				},
+			})
+			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errPayload) //nolint:errcheck
 			flusher.Flush()
 		}
 		return
@@ -1109,6 +1166,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			releaseTurnSlots()
 			if turnErr != nil || result == nil {
 				return
+			}
+			if account.Type == service.AccountTypeOAuth {
+				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, result.ResponseHeaders)
 			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
 			h.submitUsageRecordTask(func(taskCtx context.Context) {

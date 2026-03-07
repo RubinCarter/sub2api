@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -44,7 +45,63 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 		out.Tools = convertAnthropicToolsToResponses(req.Tools)
 	}
 
+	// Convert thinking → reasoning.
+	// generate_summary="auto" causes the upstream to emit reasoning_summary_text
+	// streaming events; the include array only needs reasoning.encrypted_content
+	// (already set above) for content continuity.
+	if req.Thinking != nil {
+		switch req.Thinking.Type {
+		case "enabled":
+			out.Reasoning = &ResponsesReasoning{Effort: "high", Summary: "auto"}
+		case "adaptive":
+			out.Reasoning = &ResponsesReasoning{Effort: "medium", Summary: "auto"}
+		}
+		// "disabled" or unknown → omit reasoning
+	}
+
+	// Convert tool_choice
+	if len(req.ToolChoice) > 0 {
+		tc, err := convertAnthropicToolChoiceToResponses(req.ToolChoice)
+		if err != nil {
+			return nil, fmt.Errorf("convert tool_choice: %w", err)
+		}
+		out.ToolChoice = tc
+	}
+
 	return out, nil
+}
+
+// convertAnthropicToolChoiceToResponses maps Anthropic tool_choice to Responses format.
+//
+//	{"type":"auto"}            → "auto"
+//	{"type":"any"}             → "required"
+//	{"type":"none"}            → "none"
+//	{"type":"tool","name":"X"} → {"type":"function","function":{"name":"X"}}
+func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage, error) {
+	var tc struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &tc); err != nil {
+		return nil, err
+	}
+
+	switch tc.Type {
+	case "auto":
+		return json.Marshal("auto")
+	case "any":
+		return json.Marshal("required")
+	case "none":
+		return json.Marshal("none")
+	case "tool":
+		return json.Marshal(map[string]any{
+			"type":     "function",
+			"function": map[string]string{"name": tc.Name},
+		})
+	default:
+		// Pass through unknown types as-is
+		return raw, nil
+	}
 }
 
 // convertAnthropicToResponsesInput builds the Responses API input items array
@@ -268,16 +325,22 @@ func extractAnthropicTextFromBlocks(blocks []AnthropicContentBlock) string {
 }
 
 // convertAnthropicToolsToResponses maps Anthropic tool definitions to
-// Responses API function tools (input_schema → parameters).
+// Responses API tools. Server-side tools like web_search are mapped to their
+// OpenAI equivalents; regular tools become function tools.
 func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
-	out := make([]ResponsesTool, len(tools))
-	for i, t := range tools {
-		out[i] = ResponsesTool{
+	var out []ResponsesTool
+	for _, t := range tools {
+		// Anthropic server tools like "web_search_20250305" → OpenAI {"type":"web_search"}
+		if strings.HasPrefix(t.Type, "web_search") {
+			out = append(out, ResponsesTool{Type: "web_search"})
+			continue
+		}
+		out = append(out, ResponsesTool{
 			Type:        "function",
 			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  t.InputSchema,
-		}
+		})
 	}
 	return out
 }

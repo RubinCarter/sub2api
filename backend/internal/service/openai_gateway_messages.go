@@ -28,6 +28,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	account *Account,
 	body []byte,
 	promptCacheKey string,
+	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
 
@@ -47,9 +48,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// 3. Model mapping
 	mappedModel := account.GetMappedModel(originalModel)
+	// 分组级降级：账号未映射时使用分组默认映射模型
+	if mappedModel == originalModel && defaultMappedModel != "" {
+		mappedModel = defaultMappedModel
+	}
 	responsesReq.Model = mappedModel
 
-	logger.L().Info("openai messages: model mapping applied",
+	logger.L().Debug("openai messages: model mapping applied",
 		zap.Int64("account_id", account.ID),
 		zap.String("original_model", originalModel),
 		zap.String("mapped_model", mappedModel),
@@ -143,14 +148,26 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
 		}
 		// Non-failover error: return Anthropic-formatted error to client
-		return s.handleAnthropicErrorResponse(resp, c)
+		return s.handleAnthropicErrorResponse(resp, c, account)
 	}
 
 	// 9. Handle normal response
+	var result *OpenAIForwardResult
+	var handleErr error
 	if isStream {
-		return s.handleAnthropicStreamingResponse(resp, c, originalModel, startTime)
+		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, originalModel, mappedModel, startTime)
+	} else {
+		result, handleErr = s.handleAnthropicNonStreamingResponse(resp, c, originalModel, mappedModel, startTime)
 	}
-	return s.handleAnthropicNonStreamingResponse(resp, c, originalModel, startTime)
+
+	// Extract and save Codex usage snapshot from response headers (for OAuth accounts)
+	if handleErr == nil && account.Type == AccountTypeOAuth {
+		if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
+			s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
+		}
+	}
+
+	return result, handleErr
 }
 
 // handleAnthropicErrorResponse reads an upstream error and returns it in
@@ -158,6 +175,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 func (s *OpenAIGatewayService) handleAnthropicErrorResponse(
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
 ) (*OpenAIForwardResult, error) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 
@@ -177,6 +195,21 @@ func (s *OpenAIGatewayService) handleAnthropicErrorResponse(
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+
+	// Apply error passthrough rules (matches handleErrorResponse pattern in openai_gateway_service.go)
+	if status, errType, errMsg, matched := applyErrorPassthroughRule(
+		c, account.Platform, resp.StatusCode, body,
+		http.StatusBadGateway, "api_error", "Upstream request failed",
+	); matched {
+		writeAnthropicError(c, status, errType, errMsg)
+		if upstreamMsg == "" {
+			upstreamMsg = errMsg
+		}
+		if upstreamMsg == "" {
+			return nil, fmt.Errorf("upstream error: %d (passthrough rule matched)", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("upstream error: %d (passthrough rule matched) message=%s", resp.StatusCode, upstreamMsg)
+	}
 
 	errType := "api_error"
 	switch {
@@ -200,6 +233,7 @@ func (s *OpenAIGatewayService) handleAnthropicNonStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
 	originalModel string,
+	mappedModel string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
@@ -233,11 +267,12 @@ func (s *OpenAIGatewayService) handleAnthropicNonStreamingResponse(
 	c.JSON(http.StatusOK, anthropicResp)
 
 	return &OpenAIForwardResult{
-		RequestID: requestID,
-		Usage:     usage,
-		Model:     originalModel,
-		Stream:    false,
-		Duration:  time.Since(startTime),
+		RequestID:    requestID,
+		Usage:        usage,
+		Model:        originalModel,
+		BillingModel: mappedModel,
+		Stream:       false,
+		Duration:     time.Since(startTime),
 	}, nil
 }
 
@@ -247,6 +282,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
 	originalModel string,
+	mappedModel string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
@@ -293,7 +329,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 
 		// Extract usage from completion events
-		if (event.Type == "response.completed" || event.Type == "response.incomplete") &&
+		if (event.Type == "response.completed" || event.Type == "response.incomplete" || event.Type == "response.failed") &&
 			event.Response != nil && event.Response.Usage != nil {
 			usage = OpenAIUsage{
 				InputTokens:  event.Response.Usage.InputTokens,
@@ -324,6 +360,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					RequestID:    requestID,
 					Usage:        usage,
 					Model:        originalModel,
+					BillingModel: mappedModel,
 					Stream:       true,
 					Duration:     time.Since(startTime),
 					FirstTokenMs: firstTokenMs,
@@ -360,6 +397,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		RequestID:    requestID,
 		Usage:        usage,
 		Model:        originalModel,
+		BillingModel: mappedModel,
 		Stream:       true,
 		Duration:     time.Since(startTime),
 		FirstTokenMs: firstTokenMs,

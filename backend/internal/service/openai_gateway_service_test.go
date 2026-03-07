@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -26,6 +27,22 @@ var _ GatewayCache = (*stubGatewayCache)(nil)
 type stubOpenAIAccountRepo struct {
 	AccountRepository
 	accounts []Account
+}
+
+type snapshotUpdateAccountRepo struct {
+	stubOpenAIAccountRepo
+	updateExtraCalls chan map[string]any
+}
+
+func (r *snapshotUpdateAccountRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if r.updateExtraCalls != nil {
+		copied := make(map[string]any, len(updates))
+		for k, v := range updates {
+			copied[k] = v
+		}
+		r.updateExtraCalls <- copied
+	}
+	return nil
 }
 
 func (r stubOpenAIAccountRepo) GetByID(ctx context.Context, id int64) (*Account, error) {
@@ -1248,6 +1265,30 @@ func TestOpenAIValidateUpstreamBaseURLEnabledEnforcesAllowlist(t *testing.T) {
 	}
 }
 
+func TestOpenAIUpdateCodexUsageSnapshotFromHeaders(t *testing.T) {
+	repo := &snapshotUpdateAccountRepo{updateExtraCalls: make(chan map[string]any, 1)}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "12")
+	headers.Set("x-codex-secondary-used-percent", "34")
+	headers.Set("x-codex-primary-window-minutes", "300")
+	headers.Set("x-codex-secondary-window-minutes", "10080")
+	headers.Set("x-codex-primary-reset-after-seconds", "600")
+	headers.Set("x-codex-secondary-reset-after-seconds", "86400")
+
+	svc.UpdateCodexUsageSnapshotFromHeaders(context.Background(), 123, headers)
+
+	select {
+	case updates := <-repo.updateExtraCalls:
+		require.Equal(t, 12.0, updates["codex_5h_used_percent"])
+		require.Equal(t, 34.0, updates["codex_7d_used_percent"])
+		require.Equal(t, 600, updates["codex_5h_reset_after_seconds"])
+		require.Equal(t, 86400, updates["codex_7d_reset_after_seconds"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected UpdateExtra to be called")
+	}
+}
+
 func TestOpenAIResponsesRequestPathSuffix(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -1332,8 +1373,49 @@ func TestOpenAIBuildUpstreamRequestPreservesCompactPathForAPIKeyBaseURL(t *testi
 	require.Equal(t, "https://example.com/v1/responses/compact", req.URL.String())
 }
 
+func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		userAgent      string
+		originator     string
+		wantOriginator string
+	}{
+		{name: "desktop originator preserved", originator: "Codex Desktop", wantOriginator: "Codex Desktop"},
+		{name: "vscode originator preserved", originator: "codex_vscode", wantOriginator: "codex_vscode"},
+		{name: "official ua fallback to codex_cli_rs", userAgent: "Codex Desktop/1.2.3", wantOriginator: "codex_cli_rs"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{"model":"gpt-5"}`)))
+			if tt.userAgent != "" {
+				c.Request.Header.Set("User-Agent", tt.userAgent)
+			}
+			if tt.originator != "" {
+				c.Request.Header.Set("originator", tt.originator)
+			}
+
+			svc := &OpenAIGatewayService{}
+			account := &Account{
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"chatgpt_account_id": "chatgpt-acc"},
+			}
+
+			isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator"))
+			req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token", false, "", isCodexCLI)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantOriginator, req.Header.Get("originator"))
+		})
+	}
+}
+
 // ==================== P1-08 修复：model 替换性能优化测试 ====================
 
+// ==================== P1-08 修复：model 替换性能优化测试 =============
 func TestReplaceModelInSSELine(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 
