@@ -41,7 +41,7 @@ const (
 	claudeAPIURL            = "https://api.anthropic.com/v1/messages?beta=true"
 	claudeAPICountTokensURL = "https://api.anthropic.com/v1/messages/count_tokens?beta=true"
 	stickySessionTTL        = time.Hour // 粘性会话TTL
-	defaultMaxLineSize      = 40 * 1024 * 1024
+	defaultMaxLineSize      = 500 * 1024 * 1024
 	// Canonical Claude Code banner. Keep it EXACT (no trailing whitespace/newlines)
 	// to match real Claude CLI traffic as closely as possible. When we need a visual
 	// separator between system blocks, we add "\n\n" at concatenation time.
@@ -526,6 +526,7 @@ type GatewayService struct {
 	userGroupRateSF       singleflight.Group
 	modelsListCache       *gocache.Cache
 	modelsListCacheTTL    time.Duration
+	settingService        *SettingService
 	responseHeaderFilter  *responseheaders.CompiledHeaderFilter
 	debugModelRouting     atomic.Bool
 	debugClaudeMimic      atomic.Bool
@@ -553,6 +554,7 @@ func NewGatewayService(
 	sessionLimitCache SessionLimitCache,
 	rpmCache RPMCache,
 	digestStore *DigestSessionStore,
+	settingService *SettingService,
 ) *GatewayService {
 	userGroupRateTTL := resolveUserGroupRateCacheTTL(cfg)
 	modelsListTTL := resolveModelsListCacheTTL(cfg)
@@ -579,6 +581,7 @@ func NewGatewayService(
 		sessionLimitCache:    sessionLimitCache,
 		rpmCache:             rpmCache,
 		userGroupRateCache:   gocache.New(userGroupRateTTL, time.Minute),
+		settingService:       settingService,
 		modelsListCache:      gocache.New(modelsListTTL, time.Minute),
 		modelsListCacheTTL:   modelsListTTL,
 		responseHeaderFilter: compileResponseHeaderFilter(cfg),
@@ -992,6 +995,11 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 		return fmt.Sprintf("user_%s_account_%s_session_%s", userID, accountUUID, sessionID)
 	}
 	return fmt.Sprintf("user_%s_account__session_%s", userID, sessionID)
+}
+
+// GenerateSessionUUID creates a deterministic UUID4 from a seed string.
+func GenerateSessionUUID(seed string) string {
+	return generateSessionUUID(seed)
 }
 
 func generateSessionUUID(seed string) string {
@@ -3328,10 +3336,6 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 	if account.Platform == PlatformSora {
 		return s.isSoraModelSupportedByAccount(account, requestedModel)
 	}
-	// OpenAI 透传模式：仅替换认证，允许所有模型
-	if account.Platform == PlatformOpenAI && account.IsOpenAIPassthroughEnabled() {
-		return true
-	}
 	// OAuth/SetupToken 账号使用 Anthropic 标准映射（短ID → 长ID）
 	if account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
 		requestedModel = claude.NormalizeModelID(requestedModel)
@@ -3944,6 +3948,20 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return s.forwardAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody, passthroughModel, parsed.Stream, startTime)
 	}
 
+	// Beta policy: evaluate once; block check + cache filter set for buildUpstreamRequest.
+	// Always overwrite the cache to prevent stale values from a previous retry with a different account.
+	if account.Platform == PlatformAnthropic && c != nil {
+		policy := s.evaluateBetaPolicy(ctx, c.GetHeader("anthropic-beta"), account)
+		if policy.blockErr != nil {
+			return nil, policy.blockErr
+		}
+		filterSet := policy.filterSet
+		if filterSet == nil {
+			filterSet = map[string]struct{}{}
+		}
+		c.Set(betaPolicyFilterSetKey, filterSet)
+	}
+
 	body := parsed.Body
 	reqModel := parsed.Model
 	reqStream := parsed.Stream
@@ -4069,7 +4087,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			if readErr == nil {
 				_ = resp.Body.Close()
 
-				if s.isThinkingBlockSignatureError(respBody) {
+				if s.isThinkingBlockSignatureError(respBody) && s.settingService.IsSignatureRectifierEnabled(ctx) {
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 						Platform:           account.Platform,
 						AccountID:          account.ID,
@@ -4186,7 +4204,45 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					resp.Body = io.NopCloser(bytes.NewReader(respBody))
 					break
 				}
-				// 不是thinking签名错误，恢复响应体
+				// 不是签名错误（或整流器已关闭），继续检查 budget 约束
+				errMsg := extractUpstreamErrorMessage(respBody)
+				if isThinkingBudgetConstraintError(errMsg) && s.settingService.IsBudgetRectifierEnabled(ctx) {
+					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+						Platform:           account.Platform,
+						AccountID:          account.ID,
+						AccountName:        account.Name,
+						UpstreamStatusCode: resp.StatusCode,
+						UpstreamRequestID:  resp.Header.Get("x-request-id"),
+						Kind:               "budget_constraint_error",
+						Message:            errMsg,
+						Detail: func() string {
+							if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+								return truncateString(string(respBody), s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+							}
+							return ""
+						}(),
+					})
+
+					rectifiedBody, applied := RectifyThinkingBudget(body)
+					if applied && time.Since(retryStart) < maxRetryElapsed {
+						logger.LegacyPrintf("service.gateway", "Account %d: detected budget_tokens constraint error, retrying with rectified budget (budget_tokens=%d, max_tokens=%d)", account.ID, BudgetRectifyBudgetTokens, BudgetRectifyMaxTokens)
+						budgetRetryReq, buildErr := s.buildUpstreamRequest(ctx, c, account, rectifiedBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
+						if buildErr == nil {
+							budgetRetryResp, retryErr := s.httpUpstream.DoWithTLS(budgetRetryReq, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
+							if retryErr == nil {
+								resp = budgetRetryResp
+								break
+							}
+							if budgetRetryResp != nil && budgetRetryResp.Body != nil {
+								_ = budgetRetryResp.Body.Close()
+							}
+							logger.LegacyPrintf("service.gateway", "Account %d: budget rectifier retry failed: %v", account.ID, retryErr)
+						} else {
+							logger.LegacyPrintf("service.gateway", "Account %d: budget rectifier retry build failed: %v", account.ID, buildErr)
+						}
+					}
+				}
+
 				resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			}
 		}
@@ -4278,7 +4334,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					return ""
 				}(),
 			})
-			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+			return nil, &UpstreamFailoverError{
+				StatusCode:             resp.StatusCode,
+				ResponseBody:           respBody,
+				RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
 	}
@@ -4308,7 +4368,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				return ""
 			}(),
 		})
-		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+		return nil, &UpstreamFailoverError{
+			StatusCode:             resp.StatusCode,
+			ResponseBody:           respBody,
+			RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+		}
 	}
 	if resp.StatusCode >= 400 {
 		// 可选：对部分 400 触发 failover（默认关闭以保持语义）
@@ -4543,7 +4607,11 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthrough(
 					return ""
 				}(),
 			})
-			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+			return nil, &UpstreamFailoverError{
+				StatusCode:             resp.StatusCode,
+				ResponseBody:           respBody,
+				RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
 	}
@@ -4573,7 +4641,11 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthrough(
 				return ""
 			}(),
 		})
-		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+		return nil, &UpstreamFailoverError{
+			StatusCode:             resp.StatusCode,
+			ResponseBody:           respBody,
+			RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+		}
 	}
 
 	if resp.StatusCode >= 400 {
@@ -5075,6 +5147,11 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		applyClaudeOAuthHeaderDefaults(req, reqStream)
 	}
 
+	// Build effective drop set: merge static defaults with dynamic beta policy filter rules
+	policyFilterSet := s.getBetaPolicyFilterSet(ctx, c, account)
+	effectiveDropSet := mergeDropSets(policyFilterSet)
+	effectiveDropWithClaudeCodeSet := mergeDropSets(policyFilterSet, claude.BetaClaudeCode)
+
 	// 处理 anthropic-beta header（OAuth 账号需要包含 oauth beta）
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
@@ -5088,17 +5165,22 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			// messages requests typically use only oauth + interleaved-thinking.
 			// Also drop claude-code beta if a downstream client added it.
 			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, droppedBetasWithClaudeCodeSet))
+			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, effectiveDropWithClaudeCodeSet))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
 			clientBetaHeader := req.Header.Get("anthropic-beta")
-			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBetaHeader), defaultDroppedBetasSet))
+			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBetaHeader), effectiveDropSet))
 		}
-	} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && req.Header.Get("anthropic-beta") == "" {
-		// API-key：仅在请求显式使用 beta 特性且客户端未提供时，按需补齐（默认关闭）
-		if requestNeedsBetaFeatures(body) {
-			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
-				req.Header.Set("anthropic-beta", beta)
+	} else {
+		// API-key accounts: apply beta policy filter to strip controlled tokens
+		if existingBeta := req.Header.Get("anthropic-beta"); existingBeta != "" {
+			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(existingBeta, effectiveDropSet))
+		} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
+			// API-key：仅在请求显式使用 beta 特性且客户端未提供时，按需补齐（默认关闭）
+			if requestNeedsBetaFeatures(body) {
+				if beta := defaultAPIKeyBetaHeader(body); beta != "" {
+					req.Header.Set("anthropic-beta", beta)
+				}
 			}
 		}
 	}
@@ -5276,6 +5358,104 @@ func stripBetaTokensWithSet(header string, drop map[string]struct{}) string {
 	return strings.Join(out, ",")
 }
 
+// BetaBlockedError indicates a request was blocked by a beta policy rule.
+type BetaBlockedError struct {
+	Message string
+}
+
+func (e *BetaBlockedError) Error() string { return e.Message }
+
+// betaPolicyResult holds the evaluated result of beta policy rules for a single request.
+type betaPolicyResult struct {
+	blockErr  *BetaBlockedError   // non-nil if a block rule matched
+	filterSet map[string]struct{} // tokens to filter (may be nil)
+}
+
+// evaluateBetaPolicy loads settings once and evaluates all rules against the given request.
+func (s *GatewayService) evaluateBetaPolicy(ctx context.Context, betaHeader string, account *Account) betaPolicyResult {
+	if s.settingService == nil {
+		return betaPolicyResult{}
+	}
+	settings, err := s.settingService.GetBetaPolicySettings(ctx)
+	if err != nil || settings == nil {
+		return betaPolicyResult{}
+	}
+	isOAuth := account.IsOAuth()
+	var result betaPolicyResult
+	for _, rule := range settings.Rules {
+		if !betaPolicyScopeMatches(rule.Scope, isOAuth) {
+			continue
+		}
+		switch rule.Action {
+		case BetaPolicyActionBlock:
+			if result.blockErr == nil && betaHeader != "" && containsBetaToken(betaHeader, rule.BetaToken) {
+				msg := rule.ErrorMessage
+				if msg == "" {
+					msg = "beta feature " + rule.BetaToken + " is not allowed"
+				}
+				result.blockErr = &BetaBlockedError{Message: msg}
+			}
+		case BetaPolicyActionFilter:
+			if result.filterSet == nil {
+				result.filterSet = make(map[string]struct{})
+			}
+			result.filterSet[rule.BetaToken] = struct{}{}
+		}
+	}
+	return result
+}
+
+// mergeDropSets merges the static defaultDroppedBetasSet with dynamic policy filter tokens.
+// Returns defaultDroppedBetasSet directly when policySet is empty (zero allocation).
+func mergeDropSets(policySet map[string]struct{}, extra ...string) map[string]struct{} {
+	if len(policySet) == 0 && len(extra) == 0 {
+		return defaultDroppedBetasSet
+	}
+	m := make(map[string]struct{}, len(defaultDroppedBetasSet)+len(policySet)+len(extra))
+	for t := range defaultDroppedBetasSet {
+		m[t] = struct{}{}
+	}
+	for t := range policySet {
+		m[t] = struct{}{}
+	}
+	for _, t := range extra {
+		m[t] = struct{}{}
+	}
+	return m
+}
+
+// betaPolicyFilterSetKey is the gin.Context key for caching the policy filter set within a request.
+const betaPolicyFilterSetKey = "betaPolicyFilterSet"
+
+// getBetaPolicyFilterSet returns the beta policy filter set, using the gin context cache if available.
+// In the /v1/messages path, Forward() evaluates the policy first and caches the result;
+// buildUpstreamRequest reuses it (zero extra DB calls). In the count_tokens path, this
+// evaluates on demand (one DB call).
+func (s *GatewayService) getBetaPolicyFilterSet(ctx context.Context, c *gin.Context, account *Account) map[string]struct{} {
+	if c != nil {
+		if v, ok := c.Get(betaPolicyFilterSetKey); ok {
+			if fs, ok := v.(map[string]struct{}); ok {
+				return fs
+			}
+		}
+	}
+	return s.evaluateBetaPolicy(ctx, "", account).filterSet
+}
+
+// betaPolicyScopeMatches checks whether a rule's scope matches the current account type.
+func betaPolicyScopeMatches(scope string, isOAuth bool) bool {
+	switch scope {
+	case BetaPolicyScopeAll:
+		return true
+	case BetaPolicyScopeOAuth:
+		return isOAuth
+	case BetaPolicyScopeAPIKey:
+		return !isOAuth
+	default:
+		return true // unknown scope → match all (fail-open)
+	}
+}
+
 // droppedBetaSet returns claude.DroppedBetas as a set, with optional extra tokens.
 func droppedBetaSet(extra ...string) map[string]struct{} {
 	m := make(map[string]struct{}, len(defaultDroppedBetasSet)+len(extra))
@@ -5286,6 +5466,19 @@ func droppedBetaSet(extra ...string) map[string]struct{} {
 		m[t] = struct{}{}
 	}
 	return m
+}
+
+// containsBetaToken checks if a comma-separated header value contains the given token.
+func containsBetaToken(header, token string) bool {
+	if header == "" || token == "" {
+		return false
+	}
+	for _, p := range strings.Split(header, ",") {
+		if strings.TrimSpace(p) == token {
+			return true
+		}
+	}
+	return false
 }
 
 func buildBetaTokenSet(tokens []string) map[string]struct{} {
@@ -5299,10 +5492,7 @@ func buildBetaTokenSet(tokens []string) map[string]struct{} {
 	return m
 }
 
-var (
-	defaultDroppedBetasSet        = buildBetaTokenSet(claude.DroppedBetas)
-	droppedBetasWithClaudeCodeSet = droppedBetaSet(claude.BetaClaudeCode)
-)
+var defaultDroppedBetasSet = buildBetaTokenSet(claude.DroppedBetas)
 
 // applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
 // This mirrors opencode-anthropic-auth behavior: do not trust downstream
@@ -6437,7 +6627,7 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 	}
 
 	// 4. 账号配额用量（账号口径：TotalCost × 账号计费倍率）
-	if cost.TotalCost > 0 && p.Account.Type == AccountTypeAPIKey && p.Account.GetQuotaLimit() > 0 {
+	if cost.TotalCost > 0 && p.Account.Type == AccountTypeAPIKey && p.Account.HasAnyQuotaLimit() {
 		accountCost := cost.TotalCost * p.AccountRateMultiplier
 		if err := deps.accountRepo.IncrementQuotaUsed(ctx, p.Account.ID, accountCost); err != nil {
 			slog.Error("increment account quota used failed", "account_id", p.Account.ID, "cost", accountCost, "error", err)
@@ -6928,7 +7118,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	// 检测 thinking block 签名错误（400）并重试一次（过滤 thinking blocks）
-	if resp.StatusCode == 400 && s.isThinkingBlockSignatureError(respBody) {
+	if resp.StatusCode == 400 && s.isThinkingBlockSignatureError(respBody) && s.settingService.IsSignatureRectifierEnabled(ctx) {
 		logger.LegacyPrintf("service.gateway", "Account %d: detected thinking block signature error on count_tokens, retrying with filtered thinking blocks", account.ID)
 
 		filteredBody := FilterThinkingBlocksForRetry(body)
@@ -7240,6 +7430,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		applyClaudeOAuthHeaderDefaults(req, false)
 	}
 
+	// Build effective drop set for count_tokens: merge static defaults with dynamic beta policy filter rules
+	ctEffectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account))
+
 	// OAuth 账号：处理 anthropic-beta header
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
@@ -7247,8 +7440,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 			incomingBeta := req.Header.Get("anthropic-beta")
 			requiredBetas := []string{claude.BetaClaudeCode, claude.BetaOAuth, claude.BetaInterleavedThinking, claude.BetaTokenCounting}
-			drop := droppedBetaSet()
-			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, drop))
+			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, ctEffectiveDropSet))
 		} else {
 			clientBetaHeader := req.Header.Get("anthropic-beta")
 			if clientBetaHeader == "" {
@@ -7258,14 +7450,19 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 				if !strings.Contains(beta, claude.BetaTokenCounting) {
 					beta = beta + "," + claude.BetaTokenCounting
 				}
-				req.Header.Set("anthropic-beta", stripBetaTokensWithSet(beta, defaultDroppedBetasSet))
+				req.Header.Set("anthropic-beta", stripBetaTokensWithSet(beta, ctEffectiveDropSet))
 			}
 		}
-	} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && req.Header.Get("anthropic-beta") == "" {
-		// API-key：与 messages 同步的按需 beta 注入（默认关闭）
-		if requestNeedsBetaFeatures(body) {
-			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
-				req.Header.Set("anthropic-beta", beta)
+	} else {
+		// API-key accounts: apply beta policy filter to strip controlled tokens
+		if existingBeta := req.Header.Get("anthropic-beta"); existingBeta != "" {
+			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(existingBeta, ctEffectiveDropSet))
+		} else if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
+			// API-key：与 messages 同步的按需 beta 注入（默认关闭）
+			if requestNeedsBetaFeatures(body) {
+				if beta := defaultAPIKeyBetaHeader(body); beta != "" {
+					req.Header.Set("anthropic-beta", beta)
+				}
 			}
 		}
 	}
