@@ -42,6 +42,7 @@ export interface SystemSettings {
   purchase_subscription_enabled: boolean
   purchase_subscription_url: string
   sora_client_enabled: boolean
+  backend_mode_enabled: boolean
   custom_menu_items: CustomMenuItem[]
   // SMTP settings
   smtp_host: string
@@ -110,6 +111,7 @@ export interface UpdateSettingsRequest {
   purchase_subscription_enabled?: boolean
   purchase_subscription_url?: string
   sora_client_enabled?: boolean
+  backend_mode_enabled?: boolean
   custom_menu_items?: CustomMenuItem[]
   smtp_host?: string
   smtp_port?: number
@@ -320,7 +322,7 @@ export async function updateRectifierSettings(
 export interface BetaPolicyRule {
   beta_token: string
   action: 'pass' | 'filter' | 'block'
-  scope: 'all' | 'oauth' | 'apikey'
+  scope: 'all' | 'oauth' | 'apikey' | 'bedrock'
   error_message?: string
 }
 

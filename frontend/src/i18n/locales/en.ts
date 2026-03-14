@@ -340,6 +340,7 @@ export default {
     redeemCodes: 'Redeem Codes',
     ops: 'Ops',
     promoCodes: 'Promo Codes',
+    backup: 'DB Backup',
     dataManagement: 'Data Management',
     settings: 'Settings',
     myAccount: 'My Account',
@@ -963,7 +964,124 @@ export default {
       standard: 'Standard',
       noDataAvailable: 'No data available',
       recentUsage: 'Recent Usage',
+      viewModelDistribution: 'Model Distribution',
+      viewSpendingRanking: 'User Spending Ranking',
+      spendingRankingTitle: 'User Spending Ranking',
+      spendingRankingUser: 'User',
+      spendingRankingRequests: 'Requests',
+      spendingRankingTokens: 'Tokens',
+      spendingRankingSpend: 'Spend',
+      spendingRankingOther: 'Others',
+      spendingRankingUsage: 'Usage',
+      spendShort: 'Spend',
+      requestsShort: 'Req',
+      tokensShort: 'Tok',
       failedToLoad: 'Failed to load dashboard statistics'
+    },
+
+    backup: {
+      title: 'Database Backup',
+      description: 'Full database backup to S3-compatible storage with scheduled backup and restore',
+      s3: {
+        title: 'S3 Storage Configuration',
+        description: 'Configure S3-compatible storage (supports Cloudflare R2)',
+        descriptionPrefix: 'Configure S3-compatible storage (supports',
+        descriptionSuffix: ')',
+        enabled: 'Enable S3 Storage',
+        endpoint: 'Endpoint',
+        region: 'Region',
+        bucket: 'Bucket',
+        prefix: 'Key Prefix',
+        accessKeyId: 'Access Key ID',
+        secretAccessKey: 'Secret Access Key',
+        secretConfigured: 'Already configured, leave empty to keep',
+        forcePathStyle: 'Force Path Style',
+        testConnection: 'Test Connection',
+        testSuccess: 'S3 connection test successful',
+        testFailed: 'S3 connection test failed',
+        saved: 'S3 configuration saved'
+      },
+      schedule: {
+        title: 'Scheduled Backup',
+        description: 'Configure automatic scheduled backups',
+        enabled: 'Enable Scheduled Backup',
+        cronExpr: 'Cron Expression',
+        cronHint: 'e.g. "0 2 * * *" means every day at 2:00 AM',
+        retainDays: 'Backup Expire Days',
+        retainDaysHint: 'Backup files auto-delete after this many days, 0 = never expire',
+        retainCount: 'Max Retain Count',
+        retainCountHint: 'Maximum number of backups to keep, 0 = unlimited',
+        saved: 'Schedule configuration saved'
+      },
+      operations: {
+        title: 'Backup Records',
+        description: 'Create manual backups and manage existing backup records',
+        createBackup: 'Create Backup',
+        backing: 'Backing up...',
+        backupCreated: 'Backup created successfully',
+        expireDays: 'Expire Days'
+      },
+      columns: {
+        status: 'Status',
+        fileName: 'File Name',
+        size: 'Size',
+        expiresAt: 'Expires At',
+        triggeredBy: 'Triggered By',
+        startedAt: 'Started At',
+        actions: 'Actions'
+      },
+      status: {
+        pending: 'Pending',
+        running: 'Running',
+        completed: 'Completed',
+        failed: 'Failed'
+      },
+      trigger: {
+        manual: 'Manual',
+        scheduled: 'Scheduled'
+      },
+      neverExpire: 'Never',
+      empty: 'No backup records',
+      actions: {
+        download: 'Download',
+        restore: 'Restore',
+        restoreConfirm: 'Are you sure you want to restore from this backup? This will overwrite the current database!',
+        restorePasswordPrompt: 'Please enter your admin password to confirm the restore operation',
+        restoreSuccess: 'Database restored successfully',
+        deleteConfirm: 'Are you sure you want to delete this backup?',
+        deleted: 'Backup deleted'
+      },
+      r2Guide: {
+        title: 'Cloudflare R2 Setup Guide',
+        intro: 'Cloudflare R2 provides S3-compatible object storage with a free tier of 10GB storage + 1M Class A requests/month, ideal for database backups.',
+        step1: {
+          title: 'Create an R2 Bucket',
+          line1: 'Log in to the Cloudflare Dashboard (dash.cloudflare.com), select "R2 Object Storage" from the sidebar',
+          line2: 'Click "Create bucket", enter a name (e.g. sub2api-backups), choose a region',
+          line3: 'Click create to finish'
+        },
+        step2: {
+          title: 'Create an API Token',
+          line1: 'On the R2 page, click "Manage R2 API Tokens" in the top right',
+          line2: 'Click "Create API token", set permission to "Object Read & Write"',
+          line3: 'Recommended: restrict to specific bucket for better security',
+          line4: 'After creation, you will see the Access Key ID and Secret Access Key',
+          warning: 'The Secret Access Key is only shown once — copy and save it immediately!'
+        },
+        step3: {
+          title: 'Get the S3 Endpoint',
+          desc: 'Find your Account ID on the R2 overview page (in the URL or the right panel). The endpoint format is:',
+          accountId: 'your_account_id'
+        },
+        step4: {
+          title: 'Fill in the Configuration',
+          checkEnabled: 'Checked',
+          bucketValue: 'Your bucket name',
+          fromStep2: 'Value from Step 2',
+          unchecked: 'Unchecked'
+        },
+        freeTier: 'R2 Free Tier: 10GB storage + 1M Class A requests + 10M Class B requests per month — more than enough for database backups.'
+      }
     },
 
     dataManagement: {
@@ -1372,7 +1490,11 @@ export default {
         accounts: 'Accounts',
         status: 'Status',
         actions: 'Actions',
-        billingType: 'Billing Type'
+        billingType: 'Billing Type',
+        userName: 'Username',
+        userEmail: 'Email',
+        userNotes: 'Notes',
+        userStatus: 'Status'
       },
       rateAndAccounts: '{rate}x rate · {count} accounts',
       accountsCount: '{count} accounts',
@@ -1411,6 +1533,26 @@ export default {
       failedToUpdate: 'Failed to update group',
       failedToDelete: 'Failed to delete group',
       nameRequired: 'Please enter group name',
+      rateMultipliers: 'Rate Multipliers',
+      rateMultipliersTitle: 'Group Rate Multipliers',
+      addUserRate: 'Add User Rate Multiplier',
+      searchUserPlaceholder: 'Search user email...',
+      noRateMultipliers: 'No user rate multipliers configured',
+      rateUpdated: 'Rate multiplier updated',
+      rateDeleted: 'Rate multiplier removed',
+      rateAdded: 'Rate multiplier added',
+      clearAll: 'Clear All',
+      confirmClearAll: 'Are you sure you want to clear all rate multiplier settings for this group? This cannot be undone.',
+      rateCleared: 'All rate multipliers cleared',
+      batchAdjust: 'Batch Adjust Rates',
+      multiplierFactor: 'Factor',
+      applyMultiplier: 'Apply',
+      rateAdjusted: 'Rates adjusted successfully',
+      rateSaved: 'Rate multipliers saved',
+      finalRate: 'Final Rate',
+      unsavedChanges: 'Unsaved changes',
+      revertChanges: 'Revert',
+      userInfo: 'User Info',
       platforms: {
         all: 'All Platforms',
         anthropic: 'Anthropic',
@@ -1574,7 +1716,7 @@ export default {
       revoke: 'Revoke',
       resetQuota: 'Reset Quota',
       resetQuotaTitle: 'Reset Usage Quota',
-      resetQuotaConfirm: "Reset the daily and weekly usage quota for '{user}'? Usage will be zeroed and windows restarted from today.",
+      resetQuotaConfirm: "Reset the daily, weekly, and monthly usage quota for '{user}'? Usage will be zeroed and windows restarted from today.",
       quotaResetSuccess: 'Quota reset successfully',
       failedToResetQuota: 'Failed to reset quota',
       noSubscriptionsYet: 'No subscriptions yet',
@@ -1743,6 +1885,9 @@ export default {
         expiresAt: 'Expires At',
         actions: 'Actions'
       },
+      privacyTrainingOff: 'Training data sharing disabled',
+      privacyCfBlocked: 'Blocked by Cloudflare, training may still be on',
+      privacyFailed: 'Failed to disable training',
       // Capacity status tooltips
       capacity: {
         windowCost: {
@@ -1827,6 +1972,23 @@ export default {
       quotaWeeklyLimitHint: 'Automatically resets every 7 days from first usage.',
       quotaTotalLimit: 'Total Limit',
       quotaTotalLimitHint: 'Cumulative spending limit. Does not auto-reset — use "Reset Quota" to clear.',
+      quotaResetMode: 'Reset Mode',
+      quotaResetModeRolling: 'Rolling Window',
+      quotaResetModeFixed: 'Fixed Time',
+      quotaResetHour: 'Reset Hour',
+      quotaWeeklyResetDay: 'Reset Day',
+      quotaResetTimezone: 'Reset Timezone',
+      quotaDailyLimitHintFixed: 'Resets daily at {hour}:00 ({timezone}).',
+      quotaWeeklyLimitHintFixed: 'Resets every {day} at {hour}:00 ({timezone}).',
+      dayOfWeek: {
+        monday: 'Monday',
+        tuesday: 'Tuesday',
+        wednesday: 'Wednesday',
+        thursday: 'Thursday',
+        friday: 'Friday',
+        saturday: 'Saturday',
+        sunday: 'Sunday',
+      },
       quotaLimitAmount: 'Total Limit',
       quotaLimitAmountHint: 'Cumulative spending limit. Does not auto-reset.',
       testConnection: 'Test Connection',
@@ -1894,6 +2056,8 @@ export default {
       accountType: 'Account Type',
       claudeCode: 'Claude Code',
       claudeConsole: 'Claude Console',
+      bedrockLabel: 'AWS Bedrock',
+      bedrockDesc: 'SigV4 / API Key',
       oauthSetupToken: 'OAuth / Setup Token',
       addMethod: 'Add Method',
       setupTokenLongLived: 'Setup Token (Long-lived)',
@@ -2083,6 +2247,26 @@ export default {
       mixedChannelWarning: 'Warning: Group "{groupName}" contains both {currentPlatform} and {otherPlatform} accounts. Mixing different channels may cause thinking block signature validation issues, which will fallback to non-thinking mode. Are you sure you want to continue?',
       pleaseEnterAccountName: 'Please enter account name',
       pleaseEnterApiKey: 'Please enter API Key',
+      bedrockAccessKeyId: 'AWS Access Key ID',
+      bedrockSecretAccessKey: 'AWS Secret Access Key',
+      bedrockSessionToken: 'AWS Session Token',
+      bedrockRegion: 'AWS Region',
+      bedrockRegionHint: 'e.g. us-east-1, us-west-2, eu-west-1',
+      bedrockForceGlobal: 'Force Global cross-region inference',
+      bedrockForceGlobalHint: 'When enabled, model IDs use the global. prefix (e.g. global.anthropic.claude-...), routing requests to any supported region worldwide for higher availability',
+      bedrockAccessKeyIdRequired: 'Please enter AWS Access Key ID',
+      bedrockSecretAccessKeyRequired: 'Please enter AWS Secret Access Key',
+      bedrockRegionRequired: 'Please select AWS Region',
+      bedrockSessionTokenHint: 'Optional, for temporary credentials',
+      bedrockSecretKeyLeaveEmpty: 'Leave empty to keep current key',
+      bedrockAuthMode: 'Authentication Mode',
+      bedrockAuthModeSigv4: 'SigV4 Signing',
+      bedrockAuthModeApikey: 'Bedrock API Key',
+      bedrockApiKeyLabel: 'Bedrock API Key',
+      bedrockApiKeyDesc: 'Bearer Token',
+      bedrockApiKeyInput: 'API Key',
+      bedrockApiKeyRequired: 'Please enter Bedrock API Key',
+      bedrockApiKeyLeaveEmpty: 'Leave empty to keep current key',
       apiKeyIsRequired: 'API Key is required',
       leaveEmptyToKeep: 'Leave empty to keep current key',
       // Upstream type
@@ -2497,7 +2681,16 @@ export default {
         unlimited: 'Unlimited'
       },
       ineligibleWarning:
-        'This account is not eligible for Antigravity, but API forwarding still works. Use at your own risk.'
+        'This account is not eligible for Antigravity, but API forwarding still works. Use at your own risk.',
+      forbidden: 'Forbidden',
+      forbiddenValidation: 'Verification Required',
+      forbiddenViolation: 'Violation Ban',
+      openVerification: 'Open Verification Link',
+      copyLink: 'Copy Link',
+      linkCopied: 'Link Copied',
+      needsReauth: 'Re-auth Required',
+      rateLimited: 'Rate Limited',
+      usageError: 'Fetch Error'
     },
 
     // Scheduled Tests
@@ -3651,6 +3844,11 @@ export default {
         refreshInterval15s: '15 seconds',
         refreshInterval30s: '30 seconds',
         refreshInterval60s: '60 seconds',
+        dashboardCards: 'Dashboard Cards',
+        displayAlertEvents: 'Display alert events',
+        displayAlertEventsHint: 'Show or hide the recent alert events card on the ops dashboard. Enabled by default.',
+        displayOpenAITokenStats: 'Display OpenAI token request stats',
+        displayOpenAITokenStatsHint: 'Show or hide the OpenAI token request stats card on the ops dashboard. Hidden by default.',
         autoRefreshCountdown: 'Auto refresh: {seconds}s',
         validation: {
           title: 'Please fix the following issues',
@@ -3830,6 +4028,9 @@ export default {
       site: {
         title: 'Site Settings',
         description: 'Customize site branding',
+        backendMode: 'Backend Mode',
+        backendModeDescription:
+          'Disables user registration, public site, and self-service features. Only admin can log in and manage the platform.',
         siteName: 'Site Name',
         siteNamePlaceholder: 'Sub2API',
         siteNameHint: 'Displayed in emails and page titles',
@@ -4074,6 +4275,7 @@ export default {
         scopeAll: 'All accounts',
         scopeOAuth: 'OAuth only',
         scopeAPIKey: 'API Key only',
+        scopeBedrock: 'Bedrock only',
         errorMessage: 'Error message',
         errorMessagePlaceholder: 'Custom error message when blocked',
         errorMessageHint: 'Leave empty for default message',
