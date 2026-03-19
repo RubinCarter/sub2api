@@ -139,6 +139,7 @@
                   </svg>
                   {{ t('nav.github') }}
                 </a>
+
               </div>
 
               <!-- Contact Support (only show if configured) -->

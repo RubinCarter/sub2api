@@ -182,22 +182,41 @@ func (s *FrontendServer) injectSettings(settingsJSON []byte) []byte {
 	headClose := []byte("</head>")
 	result := bytes.Replace(s.baseHTML, headClose, append(script, headClose...), 1)
 
-	// Replace <title> with configured site_name to prevent flash of default title
-	var cfg struct {
-		SiteName    string `json:"site_name"`
-		SiteSubtitle string `json:"site_subtitle"`
-	}
-	if json.Unmarshal(settingsJSON, &cfg) == nil && cfg.SiteName != "" {
-		oldTitle := []byte("<title>Sub2API - AI API Gateway</title>")
-		subtitle := cfg.SiteSubtitle
-		if subtitle == "" {
-			subtitle = "AI API Gateway"
-		}
-		newTitle := []byte("<title>" + cfg.SiteName + " - " + subtitle + "</title>")
-		result = bytes.Replace(result, oldTitle, newTitle, 1)
-	}
+	// Replace <title> with custom site name so the browser tab shows it immediately
+	result = injectSiteTitle(result, settingsJSON)
 
 	return result
+}
+
+// injectSiteTitle replaces the static <title> in HTML with the configured site name.
+// This ensures the browser tab shows the correct title before JS executes.
+func injectSiteTitle(html, settingsJSON []byte) []byte {
+	var cfg struct {
+		SiteName     string `json:"site_name"`
+		SiteSubtitle string `json:"site_subtitle"`
+	}
+	if err := json.Unmarshal(settingsJSON, &cfg); err != nil || cfg.SiteName == "" {
+		return html
+	}
+
+	subtitle := cfg.SiteSubtitle
+	if subtitle == "" {
+		subtitle = "AI API Gateway"
+	}
+
+	// Find and replace the existing <title>...</title>
+	titleStart := bytes.Index(html, []byte("<title>"))
+	titleEnd := bytes.Index(html, []byte("</title>"))
+	if titleStart == -1 || titleEnd == -1 || titleEnd <= titleStart {
+		return html
+	}
+
+	newTitle := []byte("<title>" + cfg.SiteName + " - " + subtitle + "</title>")
+	var buf bytes.Buffer
+	buf.Write(html[:titleStart])
+	buf.Write(newTitle)
+	buf.Write(html[titleEnd+len("</title>"):])
+	return buf.Bytes()
 }
 
 // replaceNoncePlaceholder replaces the nonce placeholder with actual nonce value
