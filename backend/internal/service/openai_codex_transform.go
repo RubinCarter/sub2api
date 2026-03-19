@@ -267,6 +267,26 @@ func normalizeCodexModel(model string) string {
 	return "gpt-5.1"
 }
 
+// SupportsXHighEffort reports whether the model accepts reasoning.effort="xhigh".
+// gpt-5.1 and gpt-5.1-codex only support none/low/medium/high; gpt-5.2+ support xhigh.
+func SupportsXHighEffort(model string) bool {
+	if !strings.HasPrefix(model, "gpt-") {
+		return true // non-gpt models: pass through unchanged
+	}
+	var major, minor int
+	n, _ := fmt.Sscanf(model, "gpt-%d.%d", &major, &minor)
+	if major > 5 {
+		return true
+	}
+	if major < 5 {
+		return false
+	}
+	if n == 1 {
+		return true // bare "gpt-5"
+	}
+	return minor >= 2
+}
+
 func SupportsVerbosity(model string) bool {
 	if !strings.HasPrefix(model, "gpt-") {
 		return true

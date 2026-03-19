@@ -54,6 +54,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	mappedModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	responsesReq.Model = mappedModel
 
+	// 3b. Clamp reasoning.effort: if the mapped model does not support "xhigh",
+	// downgrade to "high" to avoid a 400 from the upstream.
+	if responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort == "xhigh" && !SupportsXHighEffort(mappedModel) {
+		responsesReq.Reasoning.Effort = "high"
+	}
+
 	logger.L().Debug("openai chat_completions: model mapping applied",
 		zap.Int64("account_id", account.ID),
 		zap.String("original_model", originalModel),
