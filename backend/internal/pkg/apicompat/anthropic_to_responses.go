@@ -409,8 +409,39 @@ func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
 			Type:        "function",
 			Name:        t.Name,
 			Description: t.Description,
-			Parameters:  t.InputSchema,
+			Parameters:  normalizeToolParameters(t.InputSchema),
 		})
+	}
+	return out
+}
+
+// normalizeToolParameters ensures that object schemas always have a "properties"
+// field, which is required by the OpenAI Responses API. MCP tools often omit
+// "properties" when they have no parameters, causing a 400 from the upstream.
+func normalizeToolParameters(schema json.RawMessage) json.RawMessage {
+	if len(schema) == 0 {
+		return json.RawMessage(`{"type":"object","properties":{}}`)
+	}
+	// Check if type=object and properties is missing
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(schema, &obj); err != nil {
+		return schema
+	}
+	typeVal, hasType := obj["type"]
+	if !hasType {
+		obj["type"] = json.RawMessage(`"object"`)
+		obj["properties"] = json.RawMessage(`{}`)
+	} else {
+		var typStr string
+		if json.Unmarshal(typeVal, &typStr) == nil && typStr == "object" {
+			if _, hasProps := obj["properties"]; !hasProps {
+				obj["properties"] = json.RawMessage(`{}`)
+			}
+		}
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return schema
 	}
 	return out
 }
