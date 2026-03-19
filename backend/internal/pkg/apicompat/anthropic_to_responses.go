@@ -45,12 +45,16 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 		out.Tools = convertAnthropicToolsToResponses(req.Tools)
 	}
 
-	// Determine reasoning effort: only output_config.effort controls the
-	// level; thinking.type is ignored. Default is xhigh when unset.
-	// Anthropic levels map to OpenAI: low→low, medium→high, high→xhigh.
-	effort := "high" // default → maps to xhigh
+	// Determine reasoning effort.
+	// Priority: output_config.effort > thinking.enabled budget mapping > default "high" (→ xhigh).
+	// thinking.disabled does NOT change the effort level (keeps default).
+	effort := "high" // default → xhigh
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
 		effort = req.OutputConfig.Effort
+	} else if req.Thinking != nil && req.Thinking.Type == "enabled" {
+		if e := thinkingBudgetToEffort(req.Thinking.BudgetTokens); e != "" {
+			effort = e
+		}
 	}
 	out.Reasoning = &ResponsesReasoning{
 		Effort:  mapAnthropicEffortToResponses(effort),
@@ -397,7 +401,18 @@ func mapAnthropicEffortToResponses(effort string) string {
 // convertAnthropicToolsToResponses maps Anthropic tool definitions to
 // Responses API tools. Server-side tools like web_search are mapped to their
 // OpenAI equivalents; regular tools become function tools.
+// Tool names longer than 64 characters (e.g. MCP tools like mcp__server__method)
+// are shortened to meet the Responses API limit.
 func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
+	// Build a unique short-name map for the whole request to avoid collisions.
+	var names []string
+	for _, t := range tools {
+		if !strings.HasPrefix(t.Type, "web_search") {
+			names = append(names, t.Name)
+		}
+	}
+	shortMap := buildToolShortNameMap(names)
+
 	var out []ResponsesTool
 	for _, t := range tools {
 		// Anthropic server tools like "web_search_20250305" → OpenAI {"type":"web_search"}
@@ -405,14 +420,101 @@ func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
 			out = append(out, ResponsesTool{Type: "web_search"})
 			continue
 		}
+		shortName := shortMap[t.Name]
 		out = append(out, ResponsesTool{
 			Type:        "function",
-			Name:        t.Name,
+			Name:        shortName,
 			Description: t.Description,
 			Parameters:  normalizeToolParameters(t.InputSchema),
 		})
 	}
 	return out
+}
+
+// buildToolShortNameMap builds a map from original tool name → shortened name,
+// guaranteeing uniqueness within the request. Names ≤ 64 chars are unchanged.
+// MCP tools (mcp__server__method) are shortened to mcp__method; others are
+// truncated. Conflicts are resolved by appending _1, _2, etc.
+func buildToolShortNameMap(names []string) map[string]string {
+	const limit = 64
+	m := make(map[string]string, len(names))
+	used := make(map[string]struct{}, len(names))
+
+	baseCandidate := func(n string) string {
+		if len(n) <= limit {
+			return n
+		}
+		if strings.HasPrefix(n, "mcp__") {
+			idx := strings.LastIndex(n, "__")
+			if idx > 0 {
+				cand := "mcp__" + n[idx+2:]
+				if len(cand) <= limit {
+					return cand
+				}
+				return cand[:limit]
+			}
+		}
+		return n[:limit]
+	}
+
+	for _, n := range names {
+		cand := baseCandidate(n)
+		if _, taken := used[cand]; !taken {
+			m[n] = cand
+			used[cand] = struct{}{}
+			continue
+		}
+		// Resolve collision
+		for i := 1; ; i++ {
+			suffix := fmt.Sprintf("_%d", i)
+			allowed := limit - len(suffix)
+			base := cand
+			if len(base) > allowed {
+				base = base[:allowed]
+			}
+			uniq := base + suffix
+			if _, taken := used[uniq]; !taken {
+				m[n] = uniq
+				used[uniq] = struct{}{}
+				break
+			}
+		}
+	}
+	return m
+}
+
+// thinkingBudgetToEffort maps Anthropic thinking budget_tokens to a Responses
+// API reasoning effort level. Mirrors airgate-openai thinkingBudgetToReasoningEffort.
+func thinkingBudgetToEffort(budget int) string {
+	switch {
+	case budget == 0:
+		return "none"
+	case budget <= 1024:
+		return "low"
+	case budget <= 8192:
+		return "medium"
+	case budget <= 24576:
+		return "high"
+	default:
+		return "xhigh"
+	}
+}
+
+// BuildReverseToolNameMap builds a short→original map from an Anthropic tools list.
+// Used on the response side to restore shortened names back to the originals.
+func BuildReverseToolNameMap(tools []AnthropicTool) map[string]string {
+	var names []string
+	for _, t := range tools {
+		if !strings.HasPrefix(t.Type, "web_search") {
+			names = append(names, t.Name)
+		}
+	}
+	forward := buildToolShortNameMap(names)
+	rev := make(map[string]string, len(forward))
+	for orig, short := range forward {
+		rev[short] = orig
+	}
+	return rev
 }
 
 // normalizeToolParameters ensures that object schemas always have a "properties"

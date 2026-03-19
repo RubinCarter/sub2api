@@ -3,6 +3,7 @@ package apicompat
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -130,6 +131,12 @@ type ResponsesEventToAnthropicState struct {
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
 	OutputIndexToBlockIdx map[int]int
 
+	// ArgsBuf accumulates function_call_arguments deltas per output_index so that
+	// empty-string fields (e.g. "pages":"") can be stripped before sending to the
+	// client. Claude Code's tool schema validation rejects empty-string values for
+	// optional parameters such as the Read tool's "pages" field.
+	ArgsBuf map[int]*strings.Builder
+
 	InputTokens          int
 	OutputTokens         int
 	CacheReadInputTokens int
@@ -143,6 +150,7 @@ type ResponsesEventToAnthropicState struct {
 func NewResponsesEventToAnthropicState() *ResponsesEventToAnthropicState {
 	return &ResponsesEventToAnthropicState{
 		OutputIndexToBlockIdx: make(map[int]int),
+		ArgsBuf:               make(map[int]*strings.Builder),
 		Created:               time.Now().Unix(),
 	}
 }
@@ -165,7 +173,7 @@ func ResponsesEventToAnthropicEvents(
 	case "response.function_call_arguments.delta":
 		return resToAnthHandleFuncArgsDelta(evt, state)
 	case "response.function_call_arguments.done":
-		return resToAnthHandleBlockDone(state)
+		return resToAnthHandleFuncArgsDone(evt, state)
 	case "response.output_item.done":
 		return resToAnthHandleOutputItemDone(evt, state)
 	case "response.reasoning_summary_text.delta":
@@ -341,20 +349,78 @@ func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 	if evt.Delta == "" {
 		return nil
 	}
-
-	blockIdx, ok := state.OutputIndexToBlockIdx[evt.OutputIndex]
-	if !ok {
+	if _, ok := state.OutputIndexToBlockIdx[evt.OutputIndex]; !ok {
 		return nil
 	}
+	// Accumulate into buffer; emit nothing yet — done event will flush after filtering.
+	buf, ok := state.ArgsBuf[evt.OutputIndex]
+	if !ok {
+		buf = &strings.Builder{}
+		state.ArgsBuf[evt.OutputIndex] = buf
+	}
+	buf.WriteString(evt.Delta)
+	return nil
+}
 
-	return []AnthropicStreamEvent{{
-		Type:  "content_block_delta",
-		Index: &blockIdx,
-		Delta: &AnthropicDelta{
-			Type:        "input_json_delta",
-			PartialJSON: evt.Delta,
-		},
-	}}
+// resToAnthHandleFuncArgsDone flushes the accumulated arguments for a
+// function_call block, strips any empty-string values (e.g. "pages":"") that
+// would cause Claude Code tool-schema validation errors, then emits a single
+// input_json_delta followed by content_block_stop.
+func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	blockIdx, ok := state.OutputIndexToBlockIdx[evt.OutputIndex]
+	if !ok {
+		return resToAnthHandleBlockDone(state)
+	}
+
+	// Prefer the complete arguments from the done event; fall back to buffer.
+	raw := evt.Arguments
+	if raw == "" {
+		if buf, ok := state.ArgsBuf[evt.OutputIndex]; ok {
+			raw = buf.String()
+		}
+	}
+	delete(state.ArgsBuf, evt.OutputIndex)
+
+	filtered := filterEmptyStringValues(raw)
+
+	var events []AnthropicStreamEvent
+	if filtered != "" {
+		events = append(events, AnthropicStreamEvent{
+			Type:  "content_block_delta",
+			Index: &blockIdx,
+			Delta: &AnthropicDelta{
+				Type:        "input_json_delta",
+				PartialJSON: filtered,
+			},
+		})
+	}
+	events = append(events, closeCurrentBlock(state)...)
+	return events
+}
+
+// filterEmptyStringValues removes JSON object keys whose value is an empty
+// string "". This prevents Claude Code from receiving tool arguments like
+// {"pages":""} which fail the Read tool's schema validation.
+func filterEmptyStringValues(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" {
+		return raw
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return raw // not a plain object, return as-is
+	}
+	for k, v := range obj {
+		var s string
+		if json.Unmarshal(v, &s) == nil && s == "" {
+			delete(obj, k)
+		}
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return string(out)
 }
 
 func resToAnthHandleReasoningDelta(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {

@@ -363,23 +363,26 @@ func TestStreamingToolCall(t *testing.T) {
 	assert.Equal(t, "tool_use", events[0].ContentBlock.Type)
 	assert.Equal(t, "call_1", events[0].ContentBlock.ID)
 
-	// 3. arguments delta
+	// 3. arguments delta — buffered internally, no SSE events emitted yet
 	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
 		Type:        "response.function_call_arguments.delta",
 		OutputIndex: 0,
 		Delta:       `{"city":`,
 	}, state)
-	require.Len(t, events, 1)
+	require.Len(t, events, 0)
+
+	// 4. arguments done — flushes buffer as a single input_json_delta (with empty-string
+	// fields stripped) followed by content_block_stop.
+	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.done",
+		OutputIndex: 0,
+		Arguments:   `{"city":"NYC"}`,
+	}, state)
+	require.Len(t, events, 2)
 	assert.Equal(t, "content_block_delta", events[0].Type)
 	assert.Equal(t, "input_json_delta", events[0].Delta.Type)
-	assert.Equal(t, `{"city":`, events[0].Delta.PartialJSON)
-
-	// 4. arguments done
-	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
-		Type: "response.function_call_arguments.done",
-	}, state)
-	require.Len(t, events, 1)
-	assert.Equal(t, "content_block_stop", events[0].Type)
+	assert.Equal(t, `{"city":"NYC"}`, events[0].Delta.PartialJSON)
+	assert.Equal(t, "content_block_stop", events[1].Type)
 
 	// 5. completed with tool_calls
 	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
