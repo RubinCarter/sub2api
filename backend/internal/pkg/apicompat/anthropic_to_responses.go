@@ -517,18 +517,24 @@ func BuildReverseToolNameMap(tools []AnthropicTool) map[string]string {
 	return rev
 }
 
-// normalizeToolParameters ensures that object schemas always have a "properties"
-// field, which is required by the OpenAI Responses API. MCP tools often omit
-// "properties" when they have no parameters, causing a 400 from the upstream.
+// normalizeToolParameters ensures the tool parameter schema is valid for
+// OpenAI's Responses API, which requires "properties" on object schemas.
+//
+//   - nil/empty → {"type":"object","properties":{}}
+//   - type=object without properties → adds "properties": {}
+//   - if type is missing → sets type=object and properties={}
+//   - otherwise → returned unchanged
 func normalizeToolParameters(schema json.RawMessage) json.RawMessage {
-	if len(schema) == 0 {
+	if len(schema) == 0 || string(schema) == "null" {
 		return json.RawMessage(`{"type":"object","properties":{}}`)
 	}
-	// Check if type=object and properties is missing
+
+	// Check if type=object and properties is missing (and add defaults when type is absent).
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(schema, &obj); err != nil {
 		return schema
 	}
+
 	typeVal, hasType := obj["type"]
 	if !hasType {
 		obj["type"] = json.RawMessage(`"object"`)
@@ -541,6 +547,7 @@ func normalizeToolParameters(schema json.RawMessage) json.RawMessage {
 			}
 		}
 	}
+
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return schema

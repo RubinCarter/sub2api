@@ -83,6 +83,7 @@ export interface SystemSettings {
 
   // Claude Code version check
   min_claude_code_version: string
+  max_claude_code_version: string
 
   // 分组隔离
   allow_ungrouped_key_scheduling: boolean
@@ -141,6 +142,7 @@ export interface UpdateSettingsRequest {
   ops_query_mode_default?: 'auto' | 'raw' | 'preagg' | string
   ops_metrics_interval_seconds?: number
   min_claude_code_version?: string
+  max_claude_code_version?: string
   allow_ungrouped_key_scheduling?: boolean
 }
 
