@@ -114,6 +114,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		PurchaseSubscriptionURL:              settings.PurchaseSubscriptionURL,
 		SoraClientEnabled:                    settings.SoraClientEnabled,
 		CustomMenuItems:                      dto.ParseCustomMenuItems(settings.CustomMenuItems),
+		CustomEndpoints:                      dto.ParseCustomEndpoints(settings.CustomEndpoints),
 		DefaultConcurrency:                   settings.DefaultConcurrency,
 		DefaultBalance:                       settings.DefaultBalance,
 		DefaultSubscriptions:                 defaultSubscriptions,
@@ -132,6 +133,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:                 settings.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:          settings.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:                   settings.BackendModeEnabled,
+		EnableFingerprintUnification:         settings.EnableFingerprintUnification,
+		EnableMetadataPassthrough:            settings.EnableMetadataPassthrough,
 	})
 }
 
@@ -182,6 +185,7 @@ type UpdateSettingsRequest struct {
 	PurchaseSubscriptionURL     *string               `json:"purchase_subscription_url"`
 	SoraClientEnabled           bool                  `json:"sora_client_enabled"`
 	CustomMenuItems             *[]dto.CustomMenuItem `json:"custom_menu_items"`
+	CustomEndpoints             *[]dto.CustomEndpoint `json:"custom_endpoints"`
 
 	// 默认配置
 	DefaultConcurrency   int                              `json:"default_concurrency"`
@@ -213,6 +217,10 @@ type UpdateSettingsRequest struct {
 
 	// Backend Mode
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
+
+	// Gateway forwarding behavior
+	EnableFingerprintUnification *bool `json:"enable_fingerprint_unification"`
+	EnableMetadataPassthrough    *bool `json:"enable_metadata_passthrough"`
 }
 
 // UpdateSettings 更新系统设置
@@ -237,10 +245,26 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if req.DefaultBalance < 0 {
 		req.DefaultBalance = 0
 	}
+	req.SMTPHost = strings.TrimSpace(req.SMTPHost)
+	req.SMTPUsername = strings.TrimSpace(req.SMTPUsername)
+	req.SMTPPassword = strings.TrimSpace(req.SMTPPassword)
+	req.SMTPFrom = strings.TrimSpace(req.SMTPFrom)
+	req.SMTPFromName = strings.TrimSpace(req.SMTPFromName)
 	if req.SMTPPort <= 0 {
 		req.SMTPPort = 587
 	}
 	req.DefaultSubscriptions = normalizeDefaultSubscriptions(req.DefaultSubscriptions)
+
+	// SMTP 配置保护：如果请求中 smtp_host 为空但数据库中已有配置，则保留已有 SMTP 配置
+	// 防止前端加载设置失败时空表单覆盖已保存的 SMTP 配置
+	if req.SMTPHost == "" && previousSettings.SMTPHost != "" {
+		req.SMTPHost = previousSettings.SMTPHost
+		req.SMTPPort = previousSettings.SMTPPort
+		req.SMTPUsername = previousSettings.SMTPUsername
+		req.SMTPFrom = previousSettings.SMTPFrom
+		req.SMTPFromName = previousSettings.SMTPFromName
+		req.SMTPUseTLS = previousSettings.SMTPUseTLS
+	}
 
 	// Turnstile 参数验证
 	if req.TurnstileEnabled {
@@ -418,6 +442,55 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		customMenuJSON = string(menuBytes)
 	}
 
+	// 自定义端点验证
+	const (
+		maxCustomEndpoints        = 10
+		maxEndpointNameLen        = 50
+		maxEndpointURLLen         = 2048
+		maxEndpointDescriptionLen = 200
+	)
+
+	customEndpointsJSON := previousSettings.CustomEndpoints
+	if req.CustomEndpoints != nil {
+		endpoints := *req.CustomEndpoints
+		if len(endpoints) > maxCustomEndpoints {
+			response.BadRequest(c, "Too many custom endpoints (max 10)")
+			return
+		}
+		for _, ep := range endpoints {
+			if strings.TrimSpace(ep.Name) == "" {
+				response.BadRequest(c, "Custom endpoint name is required")
+				return
+			}
+			if len(ep.Name) > maxEndpointNameLen {
+				response.BadRequest(c, "Custom endpoint name is too long (max 50 characters)")
+				return
+			}
+			if strings.TrimSpace(ep.Endpoint) == "" {
+				response.BadRequest(c, "Custom endpoint URL is required")
+				return
+			}
+			if len(ep.Endpoint) > maxEndpointURLLen {
+				response.BadRequest(c, "Custom endpoint URL is too long (max 2048 characters)")
+				return
+			}
+			if err := config.ValidateAbsoluteHTTPURL(strings.TrimSpace(ep.Endpoint)); err != nil {
+				response.BadRequest(c, "Custom endpoint URL must be an absolute http(s) URL")
+				return
+			}
+			if len(ep.Description) > maxEndpointDescriptionLen {
+				response.BadRequest(c, "Custom endpoint description is too long (max 200 characters)")
+				return
+			}
+		}
+		endpointBytes, err := json.Marshal(endpoints)
+		if err != nil {
+			response.BadRequest(c, "Failed to serialize custom endpoints")
+			return
+		}
+		customEndpointsJSON = string(endpointBytes)
+	}
+
 	// Ops metrics collector interval validation (seconds).
 	if req.OpsMetricsIntervalSeconds != nil {
 		v := *req.OpsMetricsIntervalSeconds
@@ -498,6 +571,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PurchaseSubscriptionURL:          purchaseURL,
 		SoraClientEnabled:                req.SoraClientEnabled,
 		CustomMenuItems:                  customMenuJSON,
+		CustomEndpoints:                  customEndpointsJSON,
 		DefaultConcurrency:               req.DefaultConcurrency,
 		DefaultBalance:                   req.DefaultBalance,
 		DefaultSubscriptions:             defaultSubscriptions,
@@ -535,6 +609,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.OpsMetricsIntervalSeconds
 			}
 			return previousSettings.OpsMetricsIntervalSeconds
+		}(),
+		EnableFingerprintUnification: func() bool {
+			if req.EnableFingerprintUnification != nil {
+				return *req.EnableFingerprintUnification
+			}
+			return previousSettings.EnableFingerprintUnification
+		}(),
+		EnableMetadataPassthrough: func() bool {
+			if req.EnableMetadataPassthrough != nil {
+				return *req.EnableMetadataPassthrough
+			}
+			return previousSettings.EnableMetadataPassthrough
 		}(),
 	}
 
@@ -602,6 +688,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PurchaseSubscriptionURL:              updatedSettings.PurchaseSubscriptionURL,
 		SoraClientEnabled:                    updatedSettings.SoraClientEnabled,
 		CustomMenuItems:                      dto.ParseCustomMenuItems(updatedSettings.CustomMenuItems),
+		CustomEndpoints:                      dto.ParseCustomEndpoints(updatedSettings.CustomEndpoints),
 		DefaultConcurrency:                   updatedSettings.DefaultConcurrency,
 		DefaultBalance:                       updatedSettings.DefaultBalance,
 		DefaultSubscriptions:                 updatedDefaultSubscriptions,
@@ -620,6 +707,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:                 updatedSettings.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:          updatedSettings.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:                   updatedSettings.BackendModeEnabled,
+		EnableFingerprintUnification:         updatedSettings.EnableFingerprintUnification,
+		EnableMetadataPassthrough:            updatedSettings.EnableMetadataPassthrough,
 	})
 }
 
@@ -795,6 +884,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.CustomMenuItems != after.CustomMenuItems {
 		changed = append(changed, "custom_menu_items")
 	}
+	if before.EnableFingerprintUnification != after.EnableFingerprintUnification {
+		changed = append(changed, "enable_fingerprint_unification")
+	}
+	if before.EnableMetadataPassthrough != after.EnableMetadataPassthrough {
+		changed = append(changed, "enable_metadata_passthrough")
+	}
 	return changed
 }
 
@@ -841,7 +936,7 @@ func equalDefaultSubscriptions(a, b []service.DefaultSubscriptionSetting) bool {
 
 // TestSMTPRequest 测试SMTP连接请求
 type TestSMTPRequest struct {
-	SMTPHost     string `json:"smtp_host" binding:"required"`
+	SMTPHost     string `json:"smtp_host"`
 	SMTPPort     int    `json:"smtp_port"`
 	SMTPUsername string `json:"smtp_username"`
 	SMTPPassword string `json:"smtp_password"`
@@ -857,17 +952,34 @@ func (h *SettingHandler) TestSMTPConnection(c *gin.Context) {
 		return
 	}
 
-	if req.SMTPPort <= 0 {
-		req.SMTPPort = 587
+	req.SMTPHost = strings.TrimSpace(req.SMTPHost)
+	req.SMTPUsername = strings.TrimSpace(req.SMTPUsername)
+
+	var savedConfig *service.SMTPConfig
+	if cfg, err := h.emailService.GetSMTPConfig(c.Request.Context()); err == nil && cfg != nil {
+		savedConfig = cfg
 	}
 
-	// 如果未提供密码，从数据库获取已保存的密码
-	password := req.SMTPPassword
-	if password == "" {
-		savedConfig, err := h.emailService.GetSMTPConfig(c.Request.Context())
-		if err == nil && savedConfig != nil {
-			password = savedConfig.Password
+	if req.SMTPHost == "" && savedConfig != nil {
+		req.SMTPHost = savedConfig.Host
+	}
+	if req.SMTPPort <= 0 {
+		if savedConfig != nil && savedConfig.Port > 0 {
+			req.SMTPPort = savedConfig.Port
+		} else {
+			req.SMTPPort = 587
 		}
+	}
+	if req.SMTPUsername == "" && savedConfig != nil {
+		req.SMTPUsername = savedConfig.Username
+	}
+	password := strings.TrimSpace(req.SMTPPassword)
+	if password == "" && savedConfig != nil {
+		password = savedConfig.Password
+	}
+	if req.SMTPHost == "" {
+		response.BadRequest(c, "SMTP host is required")
+		return
 	}
 
 	config := &service.SMTPConfig{
@@ -890,7 +1002,7 @@ func (h *SettingHandler) TestSMTPConnection(c *gin.Context) {
 // SendTestEmailRequest 发送测试邮件请求
 type SendTestEmailRequest struct {
 	Email        string `json:"email" binding:"required,email"`
-	SMTPHost     string `json:"smtp_host" binding:"required"`
+	SMTPHost     string `json:"smtp_host"`
 	SMTPPort     int    `json:"smtp_port"`
 	SMTPUsername string `json:"smtp_username"`
 	SMTPPassword string `json:"smtp_password"`
@@ -908,17 +1020,42 @@ func (h *SettingHandler) SendTestEmail(c *gin.Context) {
 		return
 	}
 
-	if req.SMTPPort <= 0 {
-		req.SMTPPort = 587
+	req.SMTPHost = strings.TrimSpace(req.SMTPHost)
+	req.SMTPUsername = strings.TrimSpace(req.SMTPUsername)
+	req.SMTPFrom = strings.TrimSpace(req.SMTPFrom)
+	req.SMTPFromName = strings.TrimSpace(req.SMTPFromName)
+
+	var savedConfig *service.SMTPConfig
+	if cfg, err := h.emailService.GetSMTPConfig(c.Request.Context()); err == nil && cfg != nil {
+		savedConfig = cfg
 	}
 
-	// 如果未提供密码，从数据库获取已保存的密码
-	password := req.SMTPPassword
-	if password == "" {
-		savedConfig, err := h.emailService.GetSMTPConfig(c.Request.Context())
-		if err == nil && savedConfig != nil {
-			password = savedConfig.Password
+	if req.SMTPHost == "" && savedConfig != nil {
+		req.SMTPHost = savedConfig.Host
+	}
+	if req.SMTPPort <= 0 {
+		if savedConfig != nil && savedConfig.Port > 0 {
+			req.SMTPPort = savedConfig.Port
+		} else {
+			req.SMTPPort = 587
 		}
+	}
+	if req.SMTPUsername == "" && savedConfig != nil {
+		req.SMTPUsername = savedConfig.Username
+	}
+	password := strings.TrimSpace(req.SMTPPassword)
+	if password == "" && savedConfig != nil {
+		password = savedConfig.Password
+	}
+	if req.SMTPFrom == "" && savedConfig != nil {
+		req.SMTPFrom = savedConfig.From
+	}
+	if req.SMTPFromName == "" && savedConfig != nil {
+		req.SMTPFromName = savedConfig.FromName
+	}
+	if req.SMTPHost == "" {
+		response.BadRequest(c, "SMTP host is required")
+		return
 	}
 
 	config := &service.SMTPConfig{
@@ -1470,18 +1607,26 @@ func (h *SettingHandler) GetRectifierSettings(c *gin.Context) {
 		return
 	}
 
+	patterns := settings.APIKeySignaturePatterns
+	if patterns == nil {
+		patterns = []string{}
+	}
 	response.Success(c, dto.RectifierSettings{
 		Enabled:                  settings.Enabled,
 		ThinkingSignatureEnabled: settings.ThinkingSignatureEnabled,
 		ThinkingBudgetEnabled:    settings.ThinkingBudgetEnabled,
+		APIKeySignatureEnabled:   settings.APIKeySignatureEnabled,
+		APIKeySignaturePatterns:  patterns,
 	})
 }
 
 // UpdateRectifierSettingsRequest 更新整流器配置请求
 type UpdateRectifierSettingsRequest struct {
-	Enabled                  bool `json:"enabled"`
-	ThinkingSignatureEnabled bool `json:"thinking_signature_enabled"`
-	ThinkingBudgetEnabled    bool `json:"thinking_budget_enabled"`
+	Enabled                  bool     `json:"enabled"`
+	ThinkingSignatureEnabled bool     `json:"thinking_signature_enabled"`
+	ThinkingBudgetEnabled    bool     `json:"thinking_budget_enabled"`
+	APIKeySignatureEnabled   bool     `json:"apikey_signature_enabled"`
+	APIKeySignaturePatterns  []string `json:"apikey_signature_patterns"`
 }
 
 // UpdateRectifierSettings 更新请求整流器配置
@@ -1493,10 +1638,32 @@ func (h *SettingHandler) UpdateRectifierSettings(c *gin.Context) {
 		return
 	}
 
+	// 校验并清理自定义匹配关键词
+	const maxPatterns = 50
+	const maxPatternLen = 500
+	if len(req.APIKeySignaturePatterns) > maxPatterns {
+		response.BadRequest(c, "Too many signature patterns (max 50)")
+		return
+	}
+	var cleanedPatterns []string
+	for _, p := range req.APIKeySignaturePatterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if len(p) > maxPatternLen {
+			response.BadRequest(c, "Signature pattern too long (max 500 characters)")
+			return
+		}
+		cleanedPatterns = append(cleanedPatterns, p)
+	}
+
 	settings := &service.RectifierSettings{
 		Enabled:                  req.Enabled,
 		ThinkingSignatureEnabled: req.ThinkingSignatureEnabled,
 		ThinkingBudgetEnabled:    req.ThinkingBudgetEnabled,
+		APIKeySignatureEnabled:   req.APIKeySignatureEnabled,
+		APIKeySignaturePatterns:  cleanedPatterns,
 	}
 
 	if err := h.settingService.SetRectifierSettings(c.Request.Context(), settings); err != nil {
@@ -1511,10 +1678,16 @@ func (h *SettingHandler) UpdateRectifierSettings(c *gin.Context) {
 		return
 	}
 
+	updatedPatterns := updatedSettings.APIKeySignaturePatterns
+	if updatedPatterns == nil {
+		updatedPatterns = []string{}
+	}
 	response.Success(c, dto.RectifierSettings{
 		Enabled:                  updatedSettings.Enabled,
 		ThinkingSignatureEnabled: updatedSettings.ThinkingSignatureEnabled,
 		ThinkingBudgetEnabled:    updatedSettings.ThinkingBudgetEnabled,
+		APIKeySignatureEnabled:   updatedSettings.APIKeySignatureEnabled,
+		APIKeySignaturePatterns:  updatedPatterns,
 	})
 }
 
