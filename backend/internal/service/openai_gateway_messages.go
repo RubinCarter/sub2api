@@ -62,12 +62,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// 3. Model mapping
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
-	upstreamModel := normalizeCodexModel(billingModel)
+	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	responsesReq.Model = upstreamModel
 
 	// 3b. Clamp reasoning.effort: if the mapped model does not support "xhigh",
 	// downgrade to "high" to avoid a 400 from the upstream.
-	if responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort == "xhigh" && !SupportsXHighEffort(mappedModel) {
+	if responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort == "xhigh" && !SupportsXHighEffort(upstreamModel) {
 		responsesReq.Reasoning.Effort = "high"
 	}
 
