@@ -132,4 +132,5 @@ docs/*
 frontend/coverage/
 aicodex
 output/
+.ropcode/
 
