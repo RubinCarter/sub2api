@@ -948,7 +948,7 @@ func TestAnthropicToResponses_ToolResultMixed(t *testing.T) {
 			{Role: "user", Content: json.RawMessage(`[
 				{"type":"tool_result","tool_use_id":"toolu_2","content":[
 					{"type":"text","text":"File metadata: 800x600 PNG"},
-					{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}
+					{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBOR"}}
 				]}
 			]`)},
 		},
@@ -972,7 +972,33 @@ func TestAnthropicToResponses_ToolResultMixed(t *testing.T) {
 	require.NoError(t, json.Unmarshal(items[3].Content, &parts))
 	require.Len(t, parts, 1)
 	assert.Equal(t, "input_image", parts[0].Type)
-	assert.Equal(t, "data:image/png;base64,AAAA", parts[0].ImageURL)
+	assert.Equal(t, "data:image/png;base64,iVBOR", parts[0].ImageURL)
+}
+
+func TestAnthropicToResponses_InvalidImageDropped(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"text","text":"Describe this"},
+				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	require.Len(t, items, 1)
+
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 1)
+	assert.Equal(t, "input_text", parts[0].Type)
+	assert.Equal(t, "Describe this", parts[0].Text)
 }
 
 func TestAnthropicToResponses_TextOnlyToolResultBackwardCompat(t *testing.T) {

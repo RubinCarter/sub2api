@@ -1,6 +1,7 @@
 package apicompat
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -311,7 +312,8 @@ func fromResponsesCallID(id string) string {
 }
 
 // anthropicImageToDataURI converts an AnthropicImageSource to a data URI string.
-// Returns "" if the source is nil or has no data.
+// Returns "" if the source is nil, has no data, or doesn't look like a
+// supported image payload for the Responses API.
 func anthropicImageToDataURI(src *AnthropicImageSource) string {
 	if src == nil || src.Data == "" {
 		return ""
@@ -320,7 +322,94 @@ func anthropicImageToDataURI(src *AnthropicImageSource) string {
 	if mediaType == "" {
 		mediaType = "image/png"
 	}
+	if !isSupportedResponsesImageMediaType(mediaType) {
+		return ""
+	}
+	if !looksLikeSupportedImagePayload(mediaType, src.Data) {
+		return ""
+	}
 	return "data:" + mediaType + ";base64," + src.Data
+}
+
+func isSupportedResponsesImageMediaType(mediaType string) bool {
+	switch mediaType {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeSupportedImagePayload(mediaType, data string) bool {
+	decoded, ok := decodeBase64Prefix(data)
+	if ok && looksLikeImageData(mediaType, decoded) {
+		return true
+	}
+	return looksLikeImageBase64Prefix(mediaType, data)
+}
+
+func decodeBase64Prefix(data string) ([]byte, bool) {
+	if data == "" {
+		return nil, false
+	}
+	if len(data) > 24 {
+		data = data[:24]
+	}
+	if decoded, err := base64.RawStdEncoding.DecodeString(data); err == nil {
+		return decoded, true
+	}
+	if m := len(data) % 4; m != 0 {
+		data += strings.Repeat("=", 4-m)
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(data); err == nil {
+		return decoded, true
+	}
+	return nil, false
+}
+
+func looksLikeImageBase64Prefix(mediaType, data string) bool {
+	switch mediaType {
+	case "image/png":
+		return strings.HasPrefix(data, "iVBOR")
+	case "image/jpeg":
+		return strings.HasPrefix(data, "/9j/")
+	case "image/gif":
+		return strings.HasPrefix(data, "R0lGOD")
+	case "image/webp":
+		return strings.HasPrefix(data, "UklGR")
+	default:
+		return false
+	}
+}
+
+func looksLikeImageData(mediaType string, data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	switch mediaType {
+	case "image/png":
+		return hasPrefixBytes(data, []byte{0x89, 0x50, 0x4e, 0x47})
+	case "image/jpeg":
+		return hasPrefixBytes(data, []byte{0xff, 0xd8, 0xff})
+	case "image/gif":
+		return hasPrefixBytes(data, []byte("GIF8"))
+	case "image/webp":
+		return hasPrefixBytes(data, []byte("RIFF")) && (len(data) < 12 || hasPrefixBytes(data[8:], []byte("WEBP")))
+	default:
+		return false
+	}
+}
+
+func hasPrefixBytes(data, prefix []byte) bool {
+	if len(data) < len(prefix) {
+		prefix = prefix[:len(data)]
+	}
+	for i := range prefix {
+		if data[i] != prefix[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // convertToolResultOutput extracts text and image content from a tool_result
