@@ -31,6 +31,31 @@ type SystemSettings struct {
 	LinuxDoConnectClientSecretConfigured bool
 	LinuxDoConnectRedirectURL            string
 
+	// Generic OIDC OAuth 登录
+	OIDCConnectEnabled                bool
+	OIDCConnectProviderName           string
+	OIDCConnectClientID               string
+	OIDCConnectClientSecret           string
+	OIDCConnectClientSecretConfigured bool
+	OIDCConnectIssuerURL              string
+	OIDCConnectDiscoveryURL           string
+	OIDCConnectAuthorizeURL           string
+	OIDCConnectTokenURL               string
+	OIDCConnectUserInfoURL            string
+	OIDCConnectJWKSURL                string
+	OIDCConnectScopes                 string
+	OIDCConnectRedirectURL            string
+	OIDCConnectFrontendRedirectURL    string
+	OIDCConnectTokenAuthMethod        string
+	OIDCConnectUsePKCE                bool
+	OIDCConnectValidateIDToken        bool
+	OIDCConnectAllowedSigningAlgs     string
+	OIDCConnectClockSkewSeconds       int
+	OIDCConnectRequireEmailVerified   bool
+	OIDCConnectUserInfoEmailPath      string
+	OIDCConnectUserInfoIDPath         string
+	OIDCConnectUserInfoUsernamePath   string
+
 	SiteName                    string
 	SiteLogo                    string
 	SiteSubtitle                string
@@ -43,6 +68,8 @@ type SystemSettings struct {
 	GithubRepo                  string
 	PurchaseSubscriptionEnabled bool
 	PurchaseSubscriptionURL     string
+	TableDefaultPageSize        int
+	TablePageSizeOptions        []int
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
 
@@ -111,12 +138,17 @@ type PublicSettings struct {
 
 	PurchaseSubscriptionEnabled bool
 	PurchaseSubscriptionURL     string
+	TableDefaultPageSize        int
+	TablePageSizeOptions        []int
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
 
-	LinuxDoOAuthEnabled bool
-	BackendModeEnabled  bool
-	Version             string
+	LinuxDoOAuthEnabled   bool
+	BackendModeEnabled    bool
+	OIDCOAuthEnabled      bool
+	OIDCOAuthProviderName string
+	PaymentEnabled        bool
+	Version               string
 }
 
 // StreamTimeoutSettings 流超时处理配置（仅控制超时后的处理方式，超时判定由网关配置控制）

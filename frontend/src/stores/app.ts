@@ -284,6 +284,9 @@ export const useAppStore = defineStore('app', () => {
    * Apply settings to store state (internal helper to avoid code duplication)
    */
   function applySettings(config: PublicSettings): void {
+    if (typeof window !== 'undefined') {
+      window.__APP_CONFIG__ = { ...config }
+    }
     cachedPublicSettings.value = config
     siteName.value = config.site_name || ''
     siteLogo.value = config.site_logo || ''
@@ -331,9 +334,14 @@ export const useAppStore = defineStore('app', () => {
         github_repo: '',
         purchase_subscription_enabled: false,
         purchase_subscription_url: '',
+        payment_enabled: false,
+        table_default_page_size: 20,
+        table_page_size_options: [10, 20, 50, 100],
         custom_menu_items: [],
         custom_endpoints: [],
         linuxdo_oauth_enabled: false,
+        oidc_oauth_enabled: false,
+        oidc_oauth_provider_name: 'OIDC',
         backend_mode_enabled: false,
         version: siteVersion.value
       }
