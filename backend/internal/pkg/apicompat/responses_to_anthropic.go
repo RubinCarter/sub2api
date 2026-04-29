@@ -53,7 +53,7 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 				Type:  "tool_use",
 				ID:    fromResponsesCallID(item.CallID),
 				Name:  item.Name,
-				Input: json.RawMessage(item.Arguments),
+				Input: sanitizeAnthropicToolUseInput(item.Name, item.Arguments),
 			})
 		case "web_search_call":
 			toolUseID := "srvtoolu_" + item.ID
@@ -130,6 +130,28 @@ func responsesStatusToAnthropicStopReason(status string, details *ResponsesIncom
 	}
 }
 
+func sanitizeAnthropicToolUseInput(name string, raw string) json.RawMessage {
+	if name != "Read" || raw == "" {
+		return json.RawMessage(raw)
+	}
+
+	var input map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &input); err != nil {
+		return json.RawMessage(raw)
+	}
+
+	if pages, ok := input["pages"]; !ok || string(pages) != `""` {
+		return json.RawMessage(raw)
+	}
+
+	delete(input, "pages")
+	sanitized, err := json.Marshal(input)
+	if err != nil {
+		return json.RawMessage(raw)
+	}
+	return sanitized
+}
+
 // ---------------------------------------------------------------------------
 // Streaming: ResponsesStreamEvent → []AnthropicStreamEvent (stateful converter)
 // ---------------------------------------------------------------------------
@@ -143,6 +165,8 @@ type ResponsesEventToAnthropicState struct {
 	ContentBlockIndex int
 	ContentBlockOpen  bool
 	CurrentBlockType  string // "text" | "thinking" | "tool_use"
+	CurrentToolName   string
+	CurrentToolArgs   string
 
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
 	OutputIndexToBlockIdx map[int]int
@@ -286,6 +310,8 @@ func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 		state.OutputIndexToBlockIdx[evt.OutputIndex] = idx
 		state.ContentBlockOpen = true
 		state.CurrentBlockType = "tool_use"
+		state.CurrentToolName = evt.Item.Name
+		state.CurrentToolArgs = ""
 
 		events = append(events, AnthropicStreamEvent{
 			Type:  "content_block_start",
@@ -365,6 +391,12 @@ func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 	if evt.Delta == "" {
 		return nil
 	}
+
+	if state.CurrentBlockType == "tool_use" && state.CurrentToolName == "Read" {
+		state.CurrentToolArgs += evt.Delta
+		return nil
+	}
+
 	if _, ok := state.OutputIndexToBlockIdx[evt.OutputIndex]; !ok {
 		return nil
 	}
@@ -393,11 +425,16 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 	if raw == "" {
 		if buf, ok := state.ArgsBuf[evt.OutputIndex]; ok {
 			raw = buf.String()
+		} else {
+			raw = state.CurrentToolArgs
 		}
 	}
 	delete(state.ArgsBuf, evt.OutputIndex)
 
-	filtered := filterEmptyStringValues(raw)
+	filtered := string(sanitizeAnthropicToolUseInput(state.CurrentToolName, raw))
+	if filtered == "" {
+		filtered = filterEmptyStringValues(raw)
+	}
 
 	var events []AnthropicStreamEvent
 	if filtered != "" {
@@ -590,6 +627,8 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 	idx := state.ContentBlockIndex
 	state.ContentBlockOpen = false
 	state.ContentBlockIndex++
+	state.CurrentToolName = ""
+	state.CurrentToolArgs = ""
 	return []AnthropicStreamEvent{{
 		Type:  "content_block_stop",
 		Index: &idx,
