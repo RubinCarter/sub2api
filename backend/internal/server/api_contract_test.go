@@ -907,6 +907,8 @@ func TestAPIContracts(t *testing.T) {
 					"hide_ccs_import_button": false,
 					"purchase_subscription_enabled": false,
 					"purchase_subscription_url": "",
+					"show_github_button": true,
+					"github_repo": "",
 					"table_default_page_size": 20,
 					"table_page_size_options": [10, 20, 50],
 					"custom_menu_items": [],
