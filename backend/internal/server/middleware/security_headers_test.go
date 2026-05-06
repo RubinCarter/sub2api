@@ -129,7 +129,7 @@ func TestSecurityHeaders(t *testing.T) {
 		assert.Contains(t, csp, "default-src 'self'")
 		assert.Contains(t, csp, "'nonce-")
 		assert.Contains(t, csp, CloudflareInsightsDomain)
-		assert.Contains(t, csp, StripeJSDomain)
+		assert.Contains(t, csp, StripeDomain)
 	})
 
 	t.Run("api_route_skips_csp_nonce_generation", func(t *testing.T) {
@@ -295,7 +295,7 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 
 		assert.Contains(t, enhanced, NonceTemplate)
 		assert.Contains(t, enhanced, CloudflareInsightsDomain)
-		assert.Contains(t, enhanced, StripeJSDomain)
+		assert.Contains(t, enhanced, StripeDomain)
 	})
 
 	t.Run("does_not_duplicate_nonce_placeholder", func(t *testing.T) {
@@ -322,7 +322,7 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 		assert.Contains(t, enhanced, "script-src")
 		assert.Contains(t, enhanced, NonceTemplate)
 		assert.Contains(t, enhanced, CloudflareInsightsDomain)
-		assert.Contains(t, enhanced, StripeJSDomain)
+		assert.Contains(t, enhanced, StripeDomain)
 	})
 
 	t.Run("preserves_existing_nonce", func(t *testing.T) {
